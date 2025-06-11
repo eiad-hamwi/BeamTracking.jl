@@ -82,6 +82,19 @@
         test_map(ExactTracking.exact_drift!, "bmad_maps/drift.jl", drift_args(TPS64{D})...; tol=5e-10, TPS_params=true)
         test_map(ExactTracking.exact_solenoid!, "bmad_maps/solenoid.jl", solenoid_args(TPS64{D})...; tol=5e-10, TPS_params=true)
 
+        function comb_func_args(::Type{T}) where {T}
+            L = T(1)
+            g = T(0.01)
+            dg = T(-0.005)
+            k1 = T(0.1)
+            p0c = T(10e6)
+            tilde_m = T(ELECTRON.mass) / p0c
+            me1 = T(0.0)
+            me2 = T(0.0)
+            return L, g, dg, k1, tilde_m, me1, me2
+        end
+
+     #   test_map(LinearTracking.combined_func!, "bmad_maps/comb_func.jl", comb_func_args(Float64)...; tol=1e-6)
 
     end 
     

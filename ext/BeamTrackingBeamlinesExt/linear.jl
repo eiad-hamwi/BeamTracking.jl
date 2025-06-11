@@ -97,17 +97,29 @@ function linear_universal!(
     if L == 0
       error("Thin bend not supported yet")
     end
-    if any(t -> t == 0 || t > 1, keys(bmultipoleparams.bdict))
-      error("Combined function bend tracking not implemented yet")
-    end
 
     K0 = get_thick_strength(bmultipoleparams.bdict[1], L, bunch.Brho_ref)
 
     if !(K0 ≈ bendparams.g)
       error("Linear tracking requires BendParams.g ≈ BMultipoleParams.K0")
     end
-    mx, my, r56, d, t = LinearTracking.linear_bend_matrices(K0, L, gamma_0, bendparams.e1, bendparams.e2)
-    runkernel!(LinearTracking.linear_coast_uncoupled!, i, v, work, mx, my, r56, d, t; kwargs...)
+
+    if any(t -> t == 0 || t > 1, keys(bmultipoleparams.bdict))
+      if all(t -> t == 1 || t == 2, keys(bmultipoleparams.bdict))
+        K1 = get_thick_strength(bmultipoleparams.bdict[2], L, bunch.Brho_ref)
+        dg = 0
+        p0c = bunch.Brho_ref*C_LIGHT*chargeof(bunch.species)
+        tilde_m = massof(bunch.species)/p0c
+        me1 = bendparams.e1 == 0 ? 0.0 : (K0+dg)*tan(bendparams.e1)
+        me2 = bendparams.e2 == 0 ? 0.0 : (K0+dg)*tan(bendparams.e2)
+        runkernel!(LinearTracking.combined_func!, i, v, work, L, bendparams.g, dg, K1, tilde_m, me1, me2; kwargs...)
+      else
+        error("Combined function bend tracking not implemented yet")
+      end
+    else
+      mx, my, r56, d, t = LinearTracking.linear_bend_matrices(K0, L, gamma_0, bendparams.e1, bendparams.e2)
+      runkernel!(LinearTracking.linear_coast_uncoupled!, i, v, work, mx, my, r56, d, t; kwargs...)
+    end
   elseif haskey(bmultipoleparams.bdict, 2) # Quadrupole
     if isactive(bendparams)
       error("For Linear combined function magnet tracking, both the K0 multipole and BendParams must be set")

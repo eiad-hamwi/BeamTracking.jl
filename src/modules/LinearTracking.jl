@@ -6,7 +6,7 @@ Linear tracking methods expanded around "zero orbit".
 # Define the Linear tracking method, and number of rows in the work matrix 
 # (equal to number of temporaries needed for a single particle)
 struct Linear end
-MAX_TEMPS(::Linear) = 5
+MAX_TEMPS(::Linear) = 14
 
 module LinearTracking
 using ..GTPSA, ..BeamTracking, ..StaticArrays, ..KernelAbstractions
@@ -110,6 +110,88 @@ end
     v[i,PZI] = m[PZI,XI] * work[i,1] + m[PZI,PXI] * work[i,2] + m[PZI,YI] * work[i,3] + m[PZI,PYI] * work[i,4] + m[PZI,ZI] * work[i,5] + m[PZI,PZI] * v[i,PZI]
   end end
 end
+
+@makekernel function combined_func!(i, v, work, L, g, dg, k1, tilde_m, me1, me2)
+  @inbounds begin @FastGTPSA! begin
+    v[i,PXI] += me1 * v[i,XI]                                 # linear entrance fringe
+    v[i,PYI] -= me1 * v[i,YI]
+    
+    work[i, 1]  = 1 + v[i, PZI]                               # rel_p
+    work[i, 2]  = k1 + g * (g + dg)                           # k_x
+    work[i, 3]  = (g * work[i, 1] - (g + dg)) / work[i, 2]    # x_c
+    work[i, 4]  = sqrt(abs(work[i, 2]) / work[i, 1])          # om_x
+    work[i, 7]  = sqrt(abs(k1) / work[i, 1])                  # om_y
+    end
+
+    if work[i, 4] * L < 1e-6
+      @FastGTPSA! begin
+      work[i, 5] = (1 - sign(work[i,2]) * (work[i, 4] * L)^2 / 6) * L   # s_x
+      work[i, 6] = 1 - sign(work[i,2]) * (work[i, 4] * L)^2 / 2         # c_x
+      work[i,14] = g * L^2 / (2 * work[i,1])                            # z2
+      end
+    elseif work[i, 2] > 0
+      @FastGTPSA! begin
+      work[i, 5] = sin(work[i, 4] * L) / work[i,4]                    # s_x
+      work[i, 6] = cos(work[i, 4] * L)                                # c_x
+      work[i,14] = -sign(work[i,2]) * g * (1 - work[i,6]) / (work[i,1] * work[i,4]^2)
+      end
+    else
+      @FastGTPSA! begin
+      work[i, 5] = sinh(work[i, 4] * L) / work[i,4]             # s_x
+      work[i, 6] = cosh(work[i, 4] * L)                         # c_x
+      work[i,14] = -sign(work[i,2]) * g * (1 - work[i,6]) / (work[i,1] * work[i,4]^2)
+      end
+    end
+
+    if work[i, 7] * L < 1e-6
+      @FastGTPSA! begin
+      work[i, 8] = (1 + sign(k1) * (work[i, 7] * L)^2 / 6) * L   # s_y
+      work[i, 9] = 1 + sign(k1) * (work[i, 7] * L)^2 / 2         # c_y
+      end
+    elseif k1 < 0
+      @FastGTPSA! begin
+      work[i, 8] = sin(work[i, 7] * L) / work[i,7]                  # s_y
+      work[i, 9] = cos(work[i, 7] * L)                              # c_y
+      end
+    else
+      @FastGTPSA! begin
+      work[i, 8] = sinh(work[i, 7] * L) / work[i,7]                 # s_y
+      work[i, 9] = cosh(work[i, 7] * L)                             # c_y
+      end
+    end
+
+    # Save coordinates
+    @FastGTPSA! begin
+    work[i,10] = v[i, XI] - work[i,3]                       # x = x - x_c
+    work[i,11] = v[i, PXI]                                  # px
+    work[i,12] = v[i, YI]                                   # y
+    work[i,13] = v[i, PYI]                                  # py
+
+    # Update transverse
+    v[i, XI]  = work[i, 6] * work[i,10] + work[i, 5] * work[i,11] / work[i, 1] + work[i, 3]
+    v[i, PXI] = -sign(work[i,2]) * work[i,4]^2 * work[i,1] * work[i,5] * work[i,10] + work[i,6] * work[i,11]
+    v[i, YI]  = work[i, 9] * work[i,12] + work[i,8] * work[i,13] / work[i,1]
+    v[i, PYI] = sign(k1) * work[i,7]^2 * work[i,1] * work[i,8] * work[i,12] + work[i, 9] * work[i,13]
+
+    # Longitudinal update
+    # NEEDS CORRECTION
+    # Update low_energy_z_correction for small pz case
+    v[i, ZI] += L * (work[i,1] * sqrt(1 + tilde_m^2) / sqrt(work[i,1]^2 + tilde_m^2) - 1) + 
+            (-g * work[i,3] * L) +
+            (-g * work[i,5]) * work[i,10] +
+            work[i,14] * work[i,11] +
+            (-sign(work[i,2]) * work[i,4]^2 * (L - work[i,6] * work[i,5]) / 4) * work[i,10]^2 +
+            (sign(work[i,2]) * work[i,4]^2 * work[i,5]^2 / (2 * work[i,1])) * work[i,10] * work[i,11] +
+            (-(L + work[i,6] * work[i,5]) / (4 * work[i,1]^2)) * work[i,11]^2 +
+            (sign(k1) * work[i,7]^2 * (L - work[i,9] * work[i,8]) / 4) * work[i,12]^2 +
+            (-sign(k1) * work[i,7]^2 * work[i,8]^2 / (2 * work[i,1])) * work[i,12] * work[i,13] +
+            (-(L + work[i,9] * work[i,8]) / (4 * work[i,1]^2)) * work[i,13]^2
+
+    v[i,PXI] += me2 * v[i,XI]
+    v[i,PYI] -= me2 * v[i,YI]                                 # linear exit fringe
+  end end
+end
+
 
 # Utility functions to create a linear matrix
 function linear_quad_matrices(K1, L)
