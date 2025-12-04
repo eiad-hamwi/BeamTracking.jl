@@ -217,5 +217,303 @@ end
     v[i, XI], v[i, YI], v[i, ZI] = q_curr
     v[i, PXI], v[i, PYI], v[i, PZI] = p_new
 end
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+
+
+
+
+
+
+
+
+
+
+
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ==============================================================================
+# 1. Gradient Interface (Bifurcation 1)
+# ==============================================================================
+
+"""
+Helper to compute gradients (∂H/∂q, ∂H/∂p).
+If a user_grad is provided, use it. Otherwise, use AD on H.
+"""
+@inline function ∇q_H(A, q, p, ::Nothing)
+    # Use ForwardDiff if no user gradient is provided.
+    # Note: For optimal performance with ForwardDiff, inputs should be StaticArrays 
+    # or small vectors. We define a closure for the full gradient.
+    TotalGrad = ForwardDiff.gradient(x -> H(x[1], x[2]), (q, p))
+    return (TotalGrad[1], TotalGrad[2])
+end
+
+@inline function ∇q_H(A::F, q, p, s, t, ds, tilt_ref, g, β0, tilde_m2) where {F}
+    # User provided gradient function expected to return (dq, dp)
+    p_x, p_y, p_z = p[1], p[2], p[3]
+    q_x, q_y, q_z = q[1], q[2], q[3]
+    rel_p = 1 + p_z
+
+    β_inv =  β0 * sqrt(muladd(rel_p, rel_p, tilde_m2))
+    β = rel_p / β_inv
+    t = q_z / ( β * C_LIGHT )
+    A_val = A((q_x, q_y, s, t)) 
+    κ = 1 + q_x * g * cos(tilt_ref)
+
+    p_kin_x = p_x - A_val[1]
+    p_kin_y = p_y - A_val[2]
+    p_kin_2 = muladd(p_kin_x, p_kin_x, p_kin_y * p_kin_y)
+
+    p_s2 = muladd(rel_p, rel_p, - p_kin_2)
+    p_s = sqrt(vifelse(p_s2 > 0, p_s2, one(p_s2)))
+    scale = κ / p_s
+
+    ∂p_x_H = scale * p_kin_x
+    ∂p_y_H = scale * p_kin_y
+    ∂pz_H  = scale * rel_p - β
+#=
+        (1 + g * x) * (1 + δ) / sqrt(rel_p^2 - p_kin_2) - 1 / (β0 sqrt((1 + δ)^2 + tilde_m^2))
+        ((κ^2 * rel_p^2 * β0^2 - 1) * rel_p^2 + κ^2 * rel_p^2 * β0^2 * tilde_m^2 + p_kin_2 ) / ( p_s * β_inv * (κ * β_inv + p_s ) )
+
+           = rel_p * (p_kin_2 - p_z * (2 + p_z) / gamsqr_0)
+                / ( β_inv * p_s * (β_inv + p_s) )
+=#
+    return SVector(∂p_x_H, ∂p_y_H, ∂pz_H)
+end
+
+
+@inline function ∇p_H(A::F, q, p, g, β0, tilde_m) where {F}
+    # User provided gradient function expected to return (dq, dp)
+    κ = 1 + g * q[1]
+    p_kin = p[1:2] .- A([q[1], q[2]])
+
+    rel_p = 1 + p[3]
+    p_s2 = rel_p * rel_p - p_kin[1] * p_kin[1] - p_kin[2] * p_kin[2]
+    p_s = sqrt(vifelse(p_s2 > 0, p_s2, one(p_s2)))
+
+    ∇⟂H = κ * p_kin / p_s
+
+    ∂pz_H = κ / p_s + 1 / ( β0 * sqrt(rel_p * rel_p + tilde_m2) )
+    ∂pz_H = rel_p * ∂pz_H
+
+    return SVector(∇⟂H..., ∂pz_H)
+end
+
+# ==============================================================================
+# 2. Solver Interface (Bifurcation 2)
+# ==============================================================================
+
+"""
+Generic skeleton for finding roots of F(x) = 0.
+Dispatches based on `method`.
+
+Using type parameters (F, T) instead of ::Function allows Julia to specialize
+on the exact closure type, eliminating function barriers and enabling better
+inlining and optimization.
+"""
+function find_root(residual_func::F, x_guess::T, method::Val{M}) where {F, T, M}
+    error("Solver method not implemented")
+end
+
+"""
+Method A: Derivative-Free (e.g., Powell's Dog Leg, Anderson Acceleration).
+Does not require the Jacobian of the residual function.
+"""
+function find_root(f::F, x_guess::StaticVector{3, T}, method::Val{:DerivativeFree}; abstol=1e-12, reltol=1e-12) where {F, T}
+    # Broyden's "Good" Method (rank-1 update on inverse Jacobian) with damped fallback.
+    # This is robust and stays compatible with SIMD/GPU element types.
+    
+    # 1. Initialization
+    x = SVector{3, T}(x_guess)
+    r = f(x)
+    B = one(SMatrix{3, 3, T})               # inverse-Jacobian seed
+    
+    # Convert scalars to type T (vital for SIMD/GPU compatibility)
+    abs_tol = T(abstol)
+    rel_tol = T(reltol)
+    step_tol = T(1e-32)
+    damping = T(0.5)
+    valN = Val(3)
+    max_iter = 10
+
+    for _ in 1:max_iter
+        # 2. Convergence Check
+        norm_x = sqrt(dot(x, x))
+        tol = abs_tol + rel_tol * norm_x
+        tol_sq = tol * tol
+
+        res_sq = dot(r, r)
+        active = res_sq > tol_sq
+        if !any(active)
+            break
+        end
+
+        # 3. Proposed Step (Full Broyden/Newton Step)
+        delta = B * r
+        x_trial = x - delta
+        r_trial = f(x_trial)
+        res_trial_sq = dot(r_trial, r_trial)
+        
+        # Check who improved
+        improved = res_trial_sq < res_sq
+        needs_relax = !improved
+
+        # 4. Conditional Damped Step (Fallback)
+        x_used = x_trial
+        r_used = r_trial
+        
+        # SIMD Optimization: Only compute fallback if at least one lane needs it
+        if any(needs_relax)
+            relax_step = damping * delta    # Damping the direction, not the residual
+            x_relax = x - relax_step
+            r_relax = f(x_relax)
+            
+            # Blend results: take trial if improved, else take relaxed
+            x_used = SVector{3, T}(ntuple(j -> vifelse(improved, x_trial[j], x_relax[j]), valN))
+            r_used = SVector{3, T}(ntuple(j -> vifelse(improved, r_trial[j], r_relax[j]), valN))
+        end
+
+        # 5. Broyden's "Good" Update for Inverse Jacobian
+        # Update B to approximate the Jacobian better for the next step
+        s = x_used - x
+        y = r_used - r
+        
+        By = B * y
+        stB = transpose(s) * B       # Row vector (s^T * B)
+        stBy = dot(stB, y)           # Scalar (s^T * B * y)
+        
+        # Protect against division by zero
+        inv_denom = vifelse(abs(stBy) > step_tol, T(1) / stBy, zero(T))
+        
+        # Formula: B_new = B + (s - B*y) * s^T * B / (s^T * B * y)
+        update = (s - By) * stB * inv_denom
+        B = B + update
+
+        # 6. Update State
+        x = x_used
+        r = r_used
+    end
+
+    return x
+end
+
+"""
+Method B: Newton-like methods (e.g., Newton-Raphson, Steffensen).
+Uses AD to calculate the Jacobian of the *residual function* itself.
+"""
+function find_root(f::F, x_guess::T, method::Val{:Newton}; abstol::Float64=1e-12, reltol::Float64=1e-12) where {F, T}
+    # We construct the Jacobian of the residual equation automatically.
+    # Note: Even if the inner gradient of H was explicit, we can AD through 
+    # the residual function to get the Hessian-vector product required here.
+    df(x) = ForwardDiff.jacobian(f, x)
+    
+    x_curr = x_guess
+    # while !converged
+    #    J = df(x_curr)
+    #    x_curr = x_curr - J \ f(x_curr)
+    # end
+    return x_curr
+end
+
+
+# ==============================================================================
+# 3. Main Integrator Step
+# ==============================================================================
+
+"""
+Performs a single time-reversible step consisting of two canonical transformations.
+
+Inputs:
+- q0, p0: State vectors
+- H: Hamiltonian function H(q, p)
+- ds: Step size
+- solver_method: Val{:DerivativeFree} or Val{:Newton}
+- user_grad: Optional function (q,p) -> (∇qH, ∇pH). Pass `nothing` to use AD.
+"""
+@makekernel fastgtpsa=true function symplectic_step!(i, coords::Coords, A, ds, solver_method::Val{M}, user_grad = nothing) where M
+    v = coords.v
+    q0 = SVector(v[i, XI], v[i, YI], v[i, ZI])
+    p0 = SVector(v[i, PXI], v[i, PYI], v[i, PZI])
+    
+    # ======================================================
+    # --- Transformation 1 ---
+    # Implicit relation: q1 = q0 + ∇p H(q1, p0) * ds
+    # We solve for q1.
+    
+    # function residual_step_1(q_trial)
+    #     # Calculate gradients at (q_trial, p0)
+    #     # Note: We only need ∇p here.
+    #     dHdp = grad_p_H(H, q_trial, p0, user_grad)
+    #     return q_trial - q0 - dHdp * ds
+    # end
+
+    # Explicit update for p1 using the resolved q1
+    # p1 = p0 - ∇q H(q1, p0) * ds
+
+
+    q1 = find_root((q1) -> q1 - q0 - ∇p_H(A, q1, p0, user_grad) * ds, q0, solver_method)
+
+    dHdq_1 = ∇q_H(A, q1, p0, user_grad)
+    p1 = p0 - dHdq_1 * ds
+
+
+    # ======================================================
+    # --- Transformation 2 ---
+    # Implicit relation: p2 = p1 - ∇q H(q1, p2) * ds
+    # We solve for p2. Note that q1 is now fixed from the previous step.
+    
+    # function residual_step_2(p_trial)
+    #     # Calculate gradients at (q1, p_trial)
+    #     dHdq = grad_q_H(H, q1, p_trial, user_grad)
+    #     return p_trial - p1 + dHdq * ds
+    # end
+
+    # Explicit update for q2
+    # q2 = q1 + ∇p H(q1, p2) * ds
+
+    
+    p2 = find_root((p2) -> p2 - p1 + ∇q_H(A, q1, p2, user_grad) * ds, p1, solver_method)
+
+    dHdp_2 = ∇p_H(A, q1, p2)
+    q2 = q1 + dHdp_2 * ds
+
+    return q2, p2
+end
 
 end
