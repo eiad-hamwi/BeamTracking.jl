@@ -11,9 +11,7 @@ using GTPSA,
       Accessors,
       SpecialFunctions,
       AtomicAndPhysicalConstants,
-      Random,
-      LinearAlgebra, 
-      ForwardDiff
+      Random
 
 using KernelAbstractions
 using SIMD: SIMD
@@ -23,7 +21,7 @@ import Base: setproperty!
 
 export Bunch, State, ParticleView, Time, TimeDependentParam
 export LinearTracking, Linear, ExactTracking, Exact
-export IntegrationTracking, SplitIntegration, DriftKick, BendKick, SolenoidKick, MatrixKick, ImplicitTracking, Implicit
+export IntegrationTracking, SplitIntegration, DriftKick, BendKick, SolenoidKick, MatrixKick
 export track!
 export sincu, sinhcu, sincuc, expq, atan2, one_cos, one_cos_norm
 export rot_quaternion, inv_rot_quaternion, quat_mul, quat_rotate
@@ -42,7 +40,6 @@ include("kernels/aperture_kernel.jl")
 include("modules/ExactTracking.jl") #; TRACKING_METHOD(::ExactTracking) = Exact
 include("modules/LinearTracking.jl") #; TRACKING_METHOD(::LinearTracking) = Linear
 include("modules/IntegrationTracking.jl") #; TRACKING_METHOD(::LinearTracking) = SplitIntegration, DriftKick, BendKick, SolenoidKick, MatrixKick
-include("modules/ImplicitTracking.jl") #; TRACKING_METHOD(::LinearTracking) = Implicit
 
 # Empty tracking method to be imported+implemented by package extensions
 function track! end
