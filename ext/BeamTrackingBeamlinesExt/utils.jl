@@ -4,10 +4,10 @@ Beamlines.DefExpr{T}(a::TimeDependentParam) where {T} = DefExpr{T}(()->convert(T
 #DefExpr{T}(a::DefExpr) where {T} = DefExpr{T}(()->convert(T,a()))
 
 function check_bl_bunch!(bl::Beamline, bunch::Bunch, notify::Bool=true)
-  R_ref = getfield(bl, :R_ref)
+  ref = getfield(bl, :ref)
   species_ref = getfield(bl, :species_ref)
   check_species!(species_ref, bunch, notify)
-  check_R_ref!(R_ref, bunch, notify)
+  check_R_ref!(bl, ref, bunch, notify)
   return
 end
 
@@ -27,16 +27,21 @@ function check_species!(species_ref::Species, bunch::Bunch, notify=true)
   return
 end
 
-function check_R_ref!(R_ref, bunch::Bunch, notify=true)
+function check_R_ref!(bl::Union{Beamline,BitsBeamline}, ref, bunch::Bunch, notify=true)
   t_ref = bunch.t_ref
   if isnan(bunch.R_ref)
-    if isnothing(R_ref)
+    if isnothing(ref)
       if notify
-        println("WARNING: Both the bunch and beamline do not have any set R_ref. If any LineElements have unnormalized fields stored as independent variables, there will be an error.")
+        println("WARNING: Both the bunch and beamline do not have any set reference energy. If any LineElements have unnormalized fields stored as independent variables, there will be an error.")
       end
     else
+      if bl isa Beamline
+        R_ref = bl.R_ref
+      else
+        R_ref = ref
+      end
       if notify
-        if R_ref isa TimeDependentParam
+        if ref isa TimeDependentParam
           println("Setting bunch.R_ref = $(R_ref(t_ref)) (reference R_ref from the Beamline at t_ref = $t_ref)")
         else
           println("Setting bunch.R_ref = $R_ref (reference R_ref from the Beamline)")
@@ -48,7 +53,7 @@ function check_R_ref!(R_ref, bunch::Bunch, notify=true)
         setfield!(bunch, :R_ref, typeof(bunch.R_ref)(R_ref))
       end
     end
-  elseif !isnothing(R_ref)  && !(R_ref ≈ bunch.R_ref) && !(R_ref isa TimeDependentParam) && notify
+  elseif !isnothing(ref)  && !(bl.R_ref ≈ bunch.R_ref) && !(bl.R_ref isa TimeDependentParam) && notify
     println("WARNING:The reference energy of the bunch does NOT equal the reference energy of the Beamline. 
               Normalized field strengths in tracking ALWAYS use the reference energy of the bunch.")
   end
