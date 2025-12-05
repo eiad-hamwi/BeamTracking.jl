@@ -93,9 +93,9 @@ Note that ∂H/∂q₃ corresponds to ∂H/∂z which is derived with chain rule
     p_s = sqrt(vifelse(p_s2 > 0, p_s2, one(p_s2)))
     scale = κ / p_s
 
-    ∂qx_H = - J_val[4,1] + J_val[1,1] - scale * fma( p_kin_x, J_val[2,1], p_kin_y * J_val[3,1] ) - g * p_s
-    ∂qy_H = - J_val[4,2] + J_val[1,2] - scale * fma( p_kin_x, J_val[2,2], p_kin_y * J_val[3,2] )
-    ∂qz_H = - J_val[4,3] + J_val[1,3] - scale * fma( p_kin_x, J_val[2,3], p_kin_y * J_val[3,3] )
+    ∂qx_H = - J_val[4,1] - J_val[1,1] - scale * fma( p_kin_x, J_val[2,1], p_kin_y * J_val[3,1] ) - g * p_s
+    ∂qy_H = - J_val[4,2] - J_val[1,2] - scale * fma( p_kin_x, J_val[2,2], p_kin_y * J_val[3,2] )
+    ∂qz_H = - J_val[4,3] - J_val[1,3] - scale * fma( p_kin_x, J_val[2,3], p_kin_y * J_val[3,3] )
 
     return SVector{3,T}(∂qx_H, ∂qy_H, ∂qz_H)
 end
