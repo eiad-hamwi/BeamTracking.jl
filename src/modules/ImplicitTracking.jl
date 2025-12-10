@@ -74,9 +74,9 @@ Note that ∂H/∂q₃ corresponds to ∂H/∂z which is derived with chain rule
     p_x, p_y, p_z = p[1], p[2], p[3]
     x, y, z       = q[1], q[2], q[3]
     rel_p = 1 + p_z
-    tilde_E = fma(rel_p, rel_p, tilde_m2)
+    tilde_E2 = fma(rel_p, rel_p, tilde_m2)
 
-    β_inv =  β0 * sqrt(tilde_E)
+    β_inv =  β0 * sqrt(tilde_E2)
     β = rel_p / β_inv
 
     t = z / ( β * C_LIGHT )
@@ -93,9 +93,9 @@ Note that ∂H/∂q₃ corresponds to ∂H/∂z which is derived with chain rule
     p_s = sqrt(vifelse(p_s2 > 0, p_s2, one(p_s2)))
     scale = κ / p_s
 
-    ∂qx_H = - J_val[4,1] - J_val[1,1] - scale * fma( p_kin_x, J_val[2,1], p_kin_y * J_val[3,1] ) - g * p_s
-    ∂qy_H = - J_val[4,2] - J_val[1,2] - scale * fma( p_kin_x, J_val[2,2], p_kin_y * J_val[3,2] )
-    ∂qz_H = - J_val[4,3] - J_val[1,3] - scale * fma( p_kin_x, J_val[2,3], p_kin_y * J_val[3,3] )
+    ∂qx_H = - κ * J_val[4,1] - J_val[1,1] - scale * fma( p_kin_x, J_val[2,1], p_kin_y * J_val[3,1] ) - g * p_s
+    ∂qy_H = - κ * J_val[4,2] - J_val[1,2] - scale * fma( p_kin_x, J_val[2,2], p_kin_y * J_val[3,2] )
+    ∂qz_H = - κ * J_val[4,3] - J_val[1,3] - scale * fma( p_kin_x, J_val[2,3], p_kin_y * J_val[3,3] )
 
     return SVector{3,T}(∂qx_H, ∂qy_H, ∂qz_H)
 end
@@ -129,14 +129,15 @@ end
 
     ∂px_H = scale * p_kin_x
     ∂py_H = scale * p_kin_y
-    ∂pz_H  = rel_p * (
-                  fma(rel_p2, fma(-g * x, κ2, 1 / γ0_2), - fma((κ * β0) ^ 2, tilde_m2, p_kin_2))
-            ) / (
-                β_inv * p_s * fma(β_inv, κ, p_s) 
-            )
-            # β - scale * rel_p
+    ∂pz_H  = β - scale * rel_p
+            # 
+            # =rel_p * (
+            #         fma(rel_p2, fma(-g * x, κ2, 1 / γ0_2), - fma((κ * β0) ^ 2, tilde_m2, p_kin_2))
+            # ) / (
+            #     β_inv * p_s * fma(β_inv, κ, p_s) 
+            # )
             #
-            # rel_p * (
+            # =rel_p * (
             #     (1 / γ0_2 - g * x * (2 + g * x)) * rel_p2 - (p_kin_2 + tilde_m2 * (κ * β0) ^ 2)
             # ) / (
             #     β_inv * p_s * fma(β_inv, κ, p_s) 
@@ -278,7 +279,7 @@ Inputs:
 @makekernel fastgtpsa=true function symplectic_step!(i, coords::Coords, 
                                                     A, s, ds, g, β0, γ0_2, tilde_m2, 
                                                     solver_method::Val, user_grad=nothing, 
-                                                    abstol=1e-15, reltol=1e-14, max_iter=25,
+                                                    abstol=1e-15, reltol=1e-14, max_iter=50,
                                                     )
     v = coords.v
     T = eltype(v[i,:])
