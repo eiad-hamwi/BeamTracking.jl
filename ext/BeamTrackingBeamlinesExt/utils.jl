@@ -27,7 +27,7 @@ function check_species!(species_ref::Species, bunch::Bunch, notify=true)
   return
 end
 
-function check_R_ref!(bl::Union{Beamline,BitsBeamline}, ref, bunch::Bunch, notify=true)
+function check_R_ref!(bl::Beamline, ref, bunch::Bunch, notify=true)
   t_ref = bunch.t_ref
   if isnan(bunch.R_ref)
     if isnothing(ref)
@@ -61,15 +61,6 @@ function check_R_ref!(bl::Union{Beamline,BitsBeamline}, ref, bunch::Bunch, notif
 end
 
 get_n_multipoles(::BMultipoleParams{T,N}) where {T,N} = N
-function get_n_multipoles(b::Beamlines.BitsBMultipoleParams{T,N}) where {T,N}
-  n = 0
-  i = 1
-  while i <= N && b.order[i] >= 0
-    n += 1
-    i += 1
-  end
-  return n
-end
 
 make_static(a::StaticArray) = SVector(a)
 make_static(a) = a
@@ -155,4 +146,27 @@ end
   return np, sp
 end
 
+#---------------------------------------------------------------------------------------------------
 
+function rf_omega(rfparams, circumference, species, R_ref)
+  if rfparams.harmon_master
+    tilde_m, gamsqr_0, beta_0 = BeamTracking.drift_params(species, R_ref)
+    return 2*pi*rfparams.harmon*C_LIGHT*beta_0/circumference
+  else
+    return 2*pi*rfparams.rf_frequency
+  end
+end
+
+#---------------------------------------------------------------------------------------------------
+
+function rf_phi0(rfparams)
+  if rfparams.zero_phase == PhaseReference.BelowTransition
+    return rfparams.phi0 + 0.5*pi
+  elseif rfparams.zero_phase == PhaseReference.AboveTransition
+    return rfparams.phi0 - 0.5*pi
+  elseif rfparams.zero_phase == PhaseReference.Accelerating
+    return rfparams.phi0
+  else
+    error("RF parameter zero_phase value not set correctly.")
+  end
+end

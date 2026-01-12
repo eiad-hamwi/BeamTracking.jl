@@ -84,19 +84,3 @@ function ParticleView(bunch::Bunch, i=1)
   q = bunch.coords.q
   return ParticleView(i, bunch.species, bunch.R_ref, bunch.t_ref, bunch.coords.state[i], view(v, :, i), isnothing(q) ? q : view(q, :, i))
 end
-
-# Update momenta for change to R_ref or change to species
-# Maybe we won't do this actually...
-#=
-function setproperty!(bunch::Bunch, key::Symbol, value)
-  if key == :R_ref
-    if value == bunch.R_ref
-      return value
-    end
-    launch!(bunch.coords, KernelCall(ExactTracking.update_P0!, (bunch.R_ref, value)))
-    setfield!(bunch, :R_ref, value)
-  else
-    setfield!(bunch, key, value)
-  end
-end
-=#

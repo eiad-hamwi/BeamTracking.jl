@@ -142,10 +142,6 @@ end
   return nothing
 end
 
-# Call kernels directly
-runkernels!(i::Nothing, coords::Coords, kc::KernelChain; kwargs...) = launch!(coords, kc; kwargs...)
-runkernels!(i, coords::Coords, kc::KernelChain; kwargs...) = _generic_kernel!(i, coords, kc)
-
 function check_kwargs(mac, kwargs...)
   valid_kwargs = [:(fastgtpsa)=>Bool, :(inbounds)=>Bool]
   for k in kwargs

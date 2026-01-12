@@ -14,40 +14,43 @@ using GTPSA,
       Random
 
 using KernelAbstractions
-using SIMD: SIMD
-      
-import GTPSA: sincu, sinhcu, normTPS
-import Base: setproperty!
+
+import GTPSA: sincu, sinhcu
 
 export Bunch, State, ParticleView, Time, TimeDependentParam
-export LinearTracking, Linear, ExactTracking, Exact
-export IntegrationTracking, SplitIntegration, DriftKick, BendKick, SolenoidKick, MatrixKick
+export Yoshida, Yoshida, MatrixKick, BendKick, SolenoidKick, DriftKick, Exact
 export track!
-export sincu, sinhcu, sincuc, expq, atan2, one_cos, one_cos_norm
-export rot_quaternion, inv_rot_quaternion, quat_mul, quat_rotate
-export gaussian_random
-export Species, E_CHARGE, EPS_0, H_BAR
 
-include("utils.jl")
+
+include("utils/coord_transforms.jl")
+include("utils/energy.jl")
+include("utils/math_simd.jl")
+include("utils/quaternions.jl")
+include("utils/z_to_time.jl")
+
 include("types.jl")
 include("time.jl")
 include("kernel.jl")
+include("tracking_methods.jl")
 
-include("helpers/track_transforms.jl")
-include("helpers/coord_transforms.jl")
-include("kernels/alignment_kernel.jl")
-include("kernels/aperture_kernel.jl")
-include("modules/ExactTracking.jl") #; TRACKING_METHOD(::ExactTracking) = Exact
-include("modules/LinearTracking.jl") #; TRACKING_METHOD(::LinearTracking) = Linear
-include("modules/IntegrationTracking.jl") #; TRACKING_METHOD(::LinearTracking) = SplitIntegration, DriftKick, BendKick, SolenoidKick, MatrixKick
+include("kernels/alignment.jl")
+include("kernels/aperture.jl")
+include("kernels/bend_kick.jl")
+include("kernels/drift_kick.jl")
+include("kernels/map.jl")
+include("kernels/multipole.jl")
+include("kernels/patch.jl")
+include("kernels/quadrupole_kick.jl")
+include("kernels/radiation.jl")
+include("kernels/ramp_P0.jl")
+include("kernels/rfcavity_kick.jl")
+include("kernels/solenoid_kick.jl")
+include("kernels/spin.jl")
+include("kernels/transforms.jl")
+include("kernels/yoshida.jl")
+
 
 # Empty tracking method to be imported+implemented by package extensions
 function track! end
-
-# --------------------------------------------------
-
-# Modules separated:
-#include("MatrixKick/MatrixKick.jl")
-#include("Linear/Linear.jl")
 
 end

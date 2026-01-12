@@ -5,7 +5,7 @@ using Random
 
   R_ref = BeamTracking.E_to_R(Species("electron"), 18e9)
   bend = SBend(g = 0.01, L = 2.0, 
-  tracking_method = SplitIntegration(order = 2, num_steps = 1, 
+  tracking_method = Yoshida(order = 2, num_steps = 1, 
   radiation_damping_on = true, radiation_fluctuations_on = true))
   line = Beamline([bend], species_ref = Species("electron"), R_ref = R_ref)
 
@@ -21,7 +21,7 @@ using Random
   0.0476104945848721 
   0.06000604532567636]'
 
-  bend.tracking_method = SplitIntegration(order = 2, num_steps = 2, 
+  bend.tracking_method = Yoshida(order = 2, num_steps = 2, 
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -34,7 +34,7 @@ using Random
   0.047610501975114294 
   0.05997400853912311]'
 
-  bend.tracking_method = SplitIntegration(order = 4, num_steps = 1,
+  bend.tracking_method = Yoshida(order = 4, num_steps = 1,
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -47,7 +47,7 @@ using Random
   0.04761050112770837 
   0.05997659826202305]'
 
-  bend.tracking_method = SplitIntegration(order = 4, num_steps = 2, 
+  bend.tracking_method = Yoshida(order = 4, num_steps = 2, 
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -60,7 +60,7 @@ using Random
   0.04761050156666369 
   0.05997317490679352]'
 
-  bend.tracking_method = SplitIntegration(order = 6, num_steps = 1,
+  bend.tracking_method = Yoshida(order = 6, num_steps = 1,
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -73,7 +73,7 @@ using Random
   0.047610497477820424 
   0.0599755625943892]'
 
-  bend.tracking_method = SplitIntegration(order = 6, num_steps = 2, 
+  bend.tracking_method = Yoshida(order = 6, num_steps = 2, 
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -86,7 +86,7 @@ using Random
   0.047610500761089414 
   0.05997722303511241]'
 
-  bend.tracking_method = SplitIntegration(order = 8, num_steps = 1, 
+  bend.tracking_method = Yoshida(order = 8, num_steps = 1, 
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)
@@ -99,7 +99,7 @@ using Random
   0.047610492940657556 
   0.059993338012956456]'
 
-  bend.tracking_method = SplitIntegration(order = 8, num_steps = 2, 
+  bend.tracking_method = Yoshida(order = 8, num_steps = 2, 
   radiation_damping_on = true, radiation_fluctuations_on = true)
   b0 = Bunch(copy(v0), species = line.species_ref, R_ref = line.R_ref)
   track!(b0, line)

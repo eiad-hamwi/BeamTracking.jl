@@ -71,8 +71,7 @@ from the nominal bend entrance face (in branch coordinates) to the actual entran
 - `q`     Quaternion rotation.
 """
 
-@inline function coord_alignment_bend_entering(x_off, y_off, z_off, 
-                                        x_rot, y_rot, tilt, g_ref, tilt_ref, ele_orient, L)
+@inline function coord_alignment_bend_entering(x_off, y_off, z_off, x_rot, y_rot, tilt, g_ref, tilt_ref, ele_orient, L)
 
   # Start: Transform to coords at center of bend arc.
   r, q = coord_bend_arc_transform(0.5*L, g_ref, tilt_ref)

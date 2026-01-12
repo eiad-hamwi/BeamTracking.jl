@@ -118,8 +118,6 @@ end
   test_time((;Bn0L=Kn0, Kn1L=DefExpr(()->Kn1), Bn3=DefExpr(()->Kn3)), (;L=DefExpr(()->L)))
   test_time((;Bn0L=DefExpr(()->Kn0), Kn1L=DefExpr(()->Kn1), Bn3=DefExpr(()->Kn3)), (;L=0))
   test_time((;Bn0L=Kn0, Kn1L=DefExpr(()->Kn1), Bn3=DefExpr(()->Kn3)), (;L=0))
-  
-  # Linear tracking does not currently support TimeDependentParams
 
   # Aperture:
   # let's make a time-dependent aperture which oscillates but will allow both
