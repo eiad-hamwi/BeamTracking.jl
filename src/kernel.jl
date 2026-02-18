@@ -9,10 +9,13 @@ blank_kernel!(args...) = nothing
   kernel::K = blank_kernel!
   args::A   = ()
   function KernelCall(kernel, args)
-    _args = map(t->time_lower(t), args)
+    _args = map(t->time_lower(batch_lower(t)), args)
     new{typeof(kernel),typeof(_args)}(kernel, _args)
   end 
 end
+
+# In case KernelCall contains batch GPU array
+Adapt.@adapt_structure KernelCall
 
 # Store the state of the reference coordinate system
 # Needed for time-dependent parameters
@@ -27,6 +30,9 @@ struct KernelChain{C<:Tuple{Vararg{<:KernelCall}}, S<:Union{Nothing,RefState}}
   ref::S    # An optional RefState for the initial time-dependent parameters
   KernelChain(chain, ref=nothing) = new{typeof(chain), typeof(ref)}(chain, ref)
 end
+
+# In case KernelChain contains batch GPU array
+Adapt.@adapt_structure KernelChain
 
 KernelChain(::Val{N}, ref=nothing) where {N} = KernelChain(ntuple(t->KernelCall(), Val{N}()), ref)
 
@@ -55,17 +61,25 @@ _generic_kernel!(i, coords, kc) = __generic_kernel!(i, coords, kc.chain, kc.ref)
 
 @unroll function __generic_kernel!(i, coords::Coords, chain, ref)
   @unroll for kcall in chain
-    args = process_args(i, coords, kcall.args, ref)
+    bargs = process_batch_args(i, kcall.args)
+    args = process_time_args(i, coords, bargs, ref)
     (kcall.kernel)(i, coords, args...)
   end
   return nothing
 end
 
-function process_args(i, coords, args, ref)
+function process_batch_args(i, args)
+  if static_batchcheck(args) 
+    return beval(args, i)
+  else
+    return args
+  end
+end
+
+function process_time_args(i, coords, args, ref)
   if !isnothing(ref) && static_timecheck(args) 
     let t = compute_time(coords.v[i,ZI], coords.v[i,PZI], ref)
-      new_args = map(arg->teval(arg, t), args)
-      return map(arg->teval(arg, t), args)
+      return teval(args, t)
     end
   else
     return args
@@ -81,7 +95,7 @@ end
   groupsize::Union{Nothing,Integer}=nothing, #backend isa CPU ? floor(Int,REGISTER_SIZE/sizeof(eltype(v))) : 256 
   multithread_threshold::Integer=Threads.nthreads() > 1 ? 1750*Threads.nthreads() : typemax(Int),
   use_KA::Bool=!(get_backend(coords.v) isa CPU && isnothing(groupsize)),
-  use_explicit_SIMD::Bool=!use_KA # Default to use explicit SIMD on CPU
+  use_explicit_SIMD::Bool=!use_KA #&& (@static VERSION < v"1.11" || Sys.ARCH != :aarch64) # Default to use explicit SIMD on CPU, excepts for Macs above LTS bc SIMD.jl bug
 ) where {V}
   v = coords.v
   N_particle = size(v, 1)

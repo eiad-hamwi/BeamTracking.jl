@@ -1,3 +1,6 @@
+# ========== Fringe  ===========================
+@enumx Fringe NoEnd BothEnds EntranceEnd ExitEnd
+
 # ========== Yoshida ===========================
 abstract type AbstractYoshida end
 macro def_integrator_struct(name)
@@ -8,8 +11,9 @@ macro def_integrator_struct(name)
       ds_step::Float64
       radiation_damping_on::Bool
       radiation_fluctuations_on::Bool
+      fringe_at::Fringe.T
   
-      function $(esc(name))(; order::Int=4, num_steps::Int=-1, ds_step::Float64=-1.0, radiation_damping_on::Bool=false, radiation_fluctuations_on::Bool=false)
+      function $(esc(name))(; order::Int=4, num_steps::Int=-1, ds_step::Float64=-1.0, radiation_damping_on::Bool=false, radiation_fluctuations_on::Bool=false, fringe_at::Fringe.T=Fringe.BothEnds)
         _order = order
         _num_steps = num_steps
         _ds_step = ds_step
@@ -26,7 +30,7 @@ macro def_integrator_struct(name)
         elseif _ds_step > 0
           _num_steps = -1
         end
-        return new(_order, _num_steps, _ds_step, radiation_damping_on, radiation_fluctuations_on)
+        return new(_order, _num_steps, _ds_step, radiation_damping_on, radiation_fluctuations_on, fringe_at)
       end
     end
   end
@@ -40,4 +44,10 @@ end
 
 
 # ========== Exact ===========================
-struct Exact end
+struct Exact
+  fringe_at::Fringe.T
+  
+  function Exact(; fringe_at::Fringe.T=Fringe.BothEnds)
+    return new(fringe_at)
+  end
+end

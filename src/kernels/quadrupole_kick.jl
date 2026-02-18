@@ -16,8 +16,8 @@ ks: vector of skew multipole strengths scaled by Bρ0
 L: element length
 """
 @makekernel fastgtpsa=true function mkm_quadrupole!(i, coords::Coords, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, w, w_inv, k1, mm, kn, ks, L)
-  knl = kn * L / 2
-  ksl = ks * L / 2
+  knl = kn .* L ./ 2
+  ksl = ks .* L ./ 2
 
   rel_p = 1 + coords.v[i,PZI]
   px = coords.v[i,PXI]
@@ -65,7 +65,7 @@ Arguments
 —————————
 k1:  g / Bρ0 = g / (p0 / q)
          where g and Bρ0 respectively denote the quadrupole gradient
-         and (signed) reference magnetic R_ref.
+         and (signed) reference magnetic p_over_q_ref.
 s: element length
 """
 @makekernel fastgtpsa=true function quadrupole_matrix!(i, coords::Coords, k1, s)

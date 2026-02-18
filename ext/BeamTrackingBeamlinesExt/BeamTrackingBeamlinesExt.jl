@@ -11,17 +11,19 @@ include("utils.jl")
 function track!(
   bunch::Bunch, 
   ele::LineElement;
+  scalar_params::Bool=false,
   ramp_particle_energy_without_rf::Bool=false,
   kwargs...
 )
   coords = bunch.coords
-  @noinline _track!(coords, bunch, ele, ele.tracking_method, ramp_particle_energy_without_rf; kwargs...)
+  @noinline _track!(coords, bunch, ele, ele.tracking_method, scalar_params, ramp_particle_energy_without_rf; kwargs...)
   return bunch
 end
 
 function track!(
   bunch::Bunch, 
   bl::Beamline; 
+  scalar_params::Bool=false,
   ramp_particle_energy_without_rf::Bool=false,
   kwargs...
 )
@@ -31,7 +33,7 @@ function track!(
   check_bl_bunch!(bl, bunch)
   
   for ele in bl.line
-    track!(bunch, ele; ramp_particle_energy_without_rf, kwargs...)
+    track!(bunch, ele; scalar_params, ramp_particle_energy_without_rf, kwargs...)
   end
 
   return bunch

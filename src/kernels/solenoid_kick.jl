@@ -20,8 +20,8 @@ sn: vector of skew multipole strengths scaled by Bρ0
 L:  element length
 """
 @makekernel fastgtpsa=true function sks_multipole!(i, coords::Coords, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, Ksol, mm, kn, ks, L)
-  knl = kn * L / 2
-  ksl = ks * L / 2
+  knl = kn .* L ./ 2
+  ksl = ks .* L ./ 2
 
   E0 = mc2/tilde_m/beta_0 # could probably exclude beta_0 because ultrarelativistic radiation
 
@@ -32,7 +32,7 @@ L:  element length
   end
 
   if isnothing(coords.q)
-    multipole_kick!(i, coords, mm, knl * 2, ksl * 2, -1)
+    multipole_kick!(i, coords, mm, knl .* 2, ksl .* 2, -1)
   else
     multipole_kick!(i, coords, mm, knl, ksl, -1)
     rotate_spin!(                 i, coords, a, 0, tilde_m, mm, kn, ks, L)

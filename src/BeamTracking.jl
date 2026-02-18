@@ -11,14 +11,16 @@ using GTPSA,
       Accessors,
       SpecialFunctions,
       AtomicAndPhysicalConstants,
-      Random
+      Random,
+      EnumX
 
 using KernelAbstractions
 
 import GTPSA: sincu, sinhcu
 
-export Bunch, State, ParticleView, Time, TimeDependentParam
+export Bunch, State, ParticleView, Time, TimeDependentParam, BatchParam
 export Yoshida, Yoshida, MatrixKick, BendKick, SolenoidKick, DriftKick, Exact
+export Fringe
 export track!
 
 
@@ -30,6 +32,7 @@ include("utils/z_to_time.jl")
 
 include("types.jl")
 include("time.jl")
+include("batch.jl")
 include("kernel.jl")
 include("tracking_methods.jl")
 

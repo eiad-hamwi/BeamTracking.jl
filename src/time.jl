@@ -1,10 +1,3 @@
-# The TimeDependentParam is quite different from a 
-# deferred expression as in Beamlines. For this, there
-# are actually no closures used - the TimeDependentParam
-# is constructed once the deferred expression is deval-ed.
-# Therefore not nesting of the TimeDependentParams to 
-# capture the "state" is necessary - they will all be just 
-# Functions of regular numbers
 struct TimeFunction{F<:Function}
   f::F
 end
@@ -53,8 +46,8 @@ function Base.literal_pow(::typeof(^), da::TimeDependentParam, ::Val{N}) where {
 end
 
 for t = (:+, :-, :sqrt, :exp, :log, :sin, :cos, :tan, :cot, :sinh, :cosh, :tanh, :inv,
-  :coth, :asin, :acos, :atan, :acot, :asinh, :acosh, :atanh, :acoth, :sinc, :csc, 
-  :csch, :acsc, :acsch, :sec, :sech, :asec, :asech, :conj, :log10, :isnan)
+  :coth, :asin, :acos, :atan, :acot, :asinh, :acosh, :atanh, :acoth, :sinc, :csc, :float,
+  :csch, :acsc, :acsch, :sec, :sech, :asec, :asech, :conj, :log10, :isnan, :sign, :abs)
   @eval begin
     Base.$t(d::TimeDependentParam) = (let f = d.f; return TimeDependentParam((t)-> ($t)(f(t))); end)
   end
@@ -80,18 +73,29 @@ Base.isinf(::TimeDependentParam) = false
 
 @inline teval(f::TimeFunction, t) = f(t)
 @inline teval(f, t) = f
-@inline teval(f::Tuple, t) = map(ti->teval(ti, t), f)
+
+# === THIS BLOCK WAS WRITTEN BY CLAUDE ===
+# Generated function for arbitrary-length tuples
+@generated function teval(f::T, t) where {T<:Tuple}
+    N = length(T.parameters)
+    if N == 0
+        return :(())
+    end
+    # Use getfield with literal integer arguments
+    exprs = [:(teval(Base.getfield(f, $i), t)) for i in 1:N]
+    return :(tuple($(exprs...)))
+end
+# === END CLAUDE ===
 
 time_lower(tp::TimeDependentParam) = tp.f
 time_lower(tp) = tp
-time_lower(tp::Tuple) = map(ti->time_lower(ti), tp)
-function time_lower(tp::SArray{N,TimeDependentParam}) where {N}
-  f = Tuple(map(ti->ti.f, tp))
-  return TimeFunction(t->SArray{N}(map(fi->fi(t), f)))
-end
-time_lower(tp::SArray{N,Any}) where {N} = time_lower(TimeDependentParam.(tp))
+# We can use map on the CPU, but not the GPU. This step of time_lower-ing is on 
+# the CPU and we are already type unstable here anyways, so we should do this.
+time_lower(tp::T) where {T<:Tuple} = map(ti->time_lower(ti), tp)
 
-#static_timecheck(::Type{<:TimeFunction}) = true
+# Arrays MUST be converted into tuples, for SIMD
+time_lower(tp::SArray{N,TimeDependentParam}) where {N} = time_lower(Tuple(tp))
+
 static_timecheck(tp) = false
 static_timecheck(::TimeFunction) = true
 @unroll function static_timecheck(t::Tuple)

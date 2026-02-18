@@ -60,10 +60,10 @@ function normalized_field(ms, knl, ksl, x, y, excluding)
       t  = (by * x - bx * y) / m
       bx = (by * y + bx * x) / m
       by = t
-      add = (0 < jm && m == ms[jm]) && (m != excluding) # branchless
-      idx = max(1, jm) # branchless trickery
-      new_by = by + knl[idx]
-      new_bx = bx + ksl[idx]
+      add = (0 < jm && m == ms[jm])
+      idx = max(1, jm) 
+      new_by = by + vifelse(m != excluding, knl[idx], knl_0)
+      new_bx = bx + vifelse(m != excluding, ksl[idx], ksl_0)
       by = vifelse(add, new_by, by)
       bx = vifelse(add, new_bx, bx)
       jm -= add

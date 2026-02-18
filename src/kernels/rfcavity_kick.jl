@@ -12,7 +12,7 @@
     if radiation_damping
       deterministic_radiation!(   i, coords, q, mc2, E_ref, 0, mm, kn, ks, L/2)
     end
-    multipole_kick!(i, coords, mm, kn * L/2, ks * L/2, -1)
+    multipole_kick!(i, coords, mm, kn .* L ./ 2, ks .* L ./ 2, -1)
   end
 
   if isnothing(coords.q)
@@ -24,7 +24,7 @@
   end
 
   if multipoles
-    multipole_kick!(i, coords, mm, kn * L/2, ks * L/2, -1)
+    multipole_kick!(i, coords, mm, kn .* L ./ 2, ks .* L ./ 2, -1)
     if radiation_damping
       deterministic_radiation!(   i, coords, q, mc2, E_ref, 0, mm, kn, ks, L/2)
     end
@@ -145,7 +145,7 @@ function omega_cavity(i, coords::Coords, a, tilde_m, omega, t0, E0_over_Rref, mm
       ay = ex
     end
 
-    ox, oy, oz = omega_field(i, coords, a, 0, beta, gamma, ax, ay, e_vec, b_vec, L)
+    ox, oy, oz = omega_field(i, coords, a, 0, tilde_m, ax, ay, e_vec, b_vec, L)
     if length(mm) > 0
       ox1, oy1, oz1 = omega_multipole(i, coords, a, 0, tilde_m, mm, kn, ks, L)
       omega = (ox + ox1, oy + oy1, oz + oz1)
