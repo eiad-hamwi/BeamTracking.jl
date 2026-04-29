@@ -25,9 +25,7 @@ export Species
 export Bunch, State, ParticleView, Time, TimeDependentParam, BatchParam
 export Yoshida, Yoshida, MatrixKick, BendKick, SolenoidKick, DriftKick, Exact
 export Fringe, SaganCavity, track!
-export launch!, value_and_jacobian, allocate_coordinate_jacobian, identity_jacobian!, jacobianize, convert_eltype
-export validate_kernelchain
-export AutoBeamTracking, BeamTrackingFlow, beamtracking_flow, beamtracking_jacobian_flat
+export track_with_jac!, value_and_jacobian, allocate_coordinate_jacobian, identity_jacobian!, jacobianize
 
 
 include("utils/coord_transforms.jl")
@@ -67,7 +65,6 @@ include("kernels/transforms.jl")
 include("kernels/yoshida.jl")
 include("kernels/ibs_kick.jl")
 include("kernels/jacobian_pushforward.jl")
-include("kernels/implicit.jl")
 
 # Empty tracking method to be imported+implemented by package extensions
 function track! end
