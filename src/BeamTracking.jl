@@ -14,7 +14,8 @@ using GTPSA,
       Random,
       EnumX,
       Statistics,
-      LinearAlgebra
+      LinearAlgebra,
+      ADTypes
 
 using KernelAbstractions
 
@@ -24,10 +25,14 @@ export Species
 export Bunch, State, ParticleView, Time, TimeDependentParam, BatchParam
 export Yoshida, Yoshida, MatrixKick, BendKick, SolenoidKick, DriftKick, Exact
 export Fringe, SaganCavity, track!
+export launch!, value_and_jacobian, allocate_coordinate_jacobian, identity_jacobian!, jacobianize, convert_eltype
+export validate_kernelchain
+export AutoBeamTracking, BeamTrackingFlow, beamtracking_flow, beamtracking_jacobian_flat
 
 
 include("utils/coord_transforms.jl")
 include("utils/energy.jl")
+include("utils/math_gpu.jl")
 include("utils/math_simd.jl")
 include("utils/quaternions.jl")
 include("utils/z_to_time.jl")
@@ -36,9 +41,11 @@ include("utils/ibs_integrals.jl")
 include("utils/random.jl")
 
 include("types.jl")
+include("beamtracking_differentiation.jl")
 include("time.jl")
 include("batch.jl")
 include("kernel.jl")
+include("utils/kernelchain_validation.jl")
 include("tracking_methods.jl")
 
 include("kernels/kernel_utils.jl")
@@ -59,6 +66,7 @@ include("kernels/spin.jl")
 include("kernels/transforms.jl")
 include("kernels/yoshida.jl")
 include("kernels/ibs_kick.jl")
+include("kernels/jacobian_pushforward.jl")
 include("kernels/implicit.jl")
 
 # Empty tracking method to be imported+implemented by package extensions
