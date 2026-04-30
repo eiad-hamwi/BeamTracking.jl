@@ -98,13 +98,15 @@ end
 
 # Generic function to launch a kernel on the bunch coordinates matrix
 # Matrix v should ALWAYS be in SoA whether for real or as a view via tranpose(v)
-@inline function launch!(
-  coords::Coords{<:Any,V},
+# Primal if `coords.jac === nothing`; else Jacobian pushforward (`jacobianize` + same `generic_kernel!` driver).
+
+@inline function _launch_body!(
+  coords::Coords{<:Any,V,<:Any,<:Any,<:Any,<:Any},
   kc::KernelChain;
-  groupsize::Union{Nothing,Integer}=nothing, #backend isa CPU ? floor(Int,REGISTER_SIZE/sizeof(eltype(v))) : 256 
-  multithread_threshold::Integer=Threads.nthreads() > 1 ? 1750*Threads.nthreads() : typemax(Int),
-  use_KA::Bool=!(get_backend(coords.v) isa CPU && isnothing(groupsize)),
-  use_explicit_SIMD::Bool=!use_KA #&& (@static VERSION < v"1.11" || Sys.ARCH != :aarch64) # Default to use explicit SIMD on CPU, excepts for Macs above LTS bc SIMD.jl bug
+  groupsize::Union{Nothing,Integer},
+  multithread_threshold::Integer,
+  use_KA::Bool,
+  use_explicit_SIMD::Bool,
 ) where {V}
   v = coords.v
   N_particle = size(v, 1)
@@ -112,29 +114,24 @@ end
   if use_KA && use_explicit_SIMD
     error("Cannot use both KernelAbstractions (KA) and explicit SIMD")
   end
-#=  
-  if !use_KA && backend isa GPU
-    error("For GPU parallelized kernel launching, KernelAbstractions (KA) must be used")
-  end
-=#
+
   if !use_KA
-    if use_explicit_SIMD && V <: SIMD.FastContiguousArray && eltype(V) <: SIMD.ScalarTypes && pick_vector_width(eltype(V)) > 1 # do SIMD
+    if use_explicit_SIMD && V <: SIMD.FastContiguousArray && eltype(V) <: SIMD.ScalarTypes && pick_vector_width(eltype(V)) > 1
       simd_lane_width = pick_vector_width(eltype(V))
       lane = SIMD.VecRange{Int(simd_lane_width)}(0)
       rmn = rem(N_particle, simd_lane_width)
       N_SIMD = N_particle - rmn
       if N_particle >= multithread_threshold
         Threads.@threads for i in 1:simd_lane_width:N_SIMD
-          @assert last(i) <= N_particle "Out of bounds!"  # Use last because SIMD.VecRange SIMD
+          @assert last(i) <= N_particle "Out of bounds!"
           _generic_kernel!(lane+i, coords, kc)
         end
       else
         for i in 1:simd_lane_width:N_SIMD
-          @assert last(i) <= N_particle "Out of bounds!"  # Use last because SIMD.VecRange SIMD
+          @assert last(i) <= N_particle "Out of bounds!"
           _generic_kernel!(lane+i, coords, kc)
         end
       end
-      # Do the remainder
       for i in N_SIMD+1:N_particle
         @assert last(i) <= N_particle "Out of bounds!"
         _generic_kernel!(i, coords, kc)
@@ -163,6 +160,44 @@ end
     KernelAbstractions.synchronize(backend)
   end
   return nothing
+end
+
+@inline function launch!(
+  coords::Coords{<:Any,V,<:Any,<:Any,<:Any,Nothing},
+  kc::KernelChain;
+  groupsize::Union{Nothing,Integer}=nothing,
+  multithread_threshold::Integer=Threads.nthreads() > 1 ? 1750*Threads.nthreads() : typemax(Int),
+  use_KA::Bool=!(get_backend(coords.v) isa CPU && isnothing(groupsize)),
+  use_explicit_SIMD::Bool=!use_KA,
+) where {V}
+  return _launch_body!(
+    coords,
+    kc;
+    groupsize,
+    multithread_threshold,
+    use_KA,
+    use_explicit_SIMD,
+  )
+end
+
+@inline function launch!(
+  coords::Coords{<:Any,V,<:Any,<:Any,<:Any,<:Any},
+  kc::KernelChain;
+  groupsize::Union{Nothing,Integer}=nothing,
+  multithread_threshold::Integer=Threads.nthreads() > 1 ? 1750*Threads.nthreads() : typemax(Int),
+  use_KA::Bool=!(get_backend(coords.v) isa CPU && isnothing(groupsize)),
+  use_explicit_SIMD::Bool=!use_KA,
+) where {V}
+  kc_eff = jacobianize(kc)
+  preflight_jacobian_tracking(coords, kc_eff; use_KA=use_KA, use_explicit_SIMD=use_explicit_SIMD)
+  return _launch_body!(
+    coords,
+    kc_eff;
+    groupsize,
+    multithread_threshold,
+    use_KA,
+    use_explicit_SIMD,
+  )
 end
 
 function check_kwargs(mac, kwargs...)

@@ -205,6 +205,7 @@ end
 include("miscellaneous_test.jl")
 include("sagan_cavity_tracking_test.jl")
 include("BeamlinesExt_test.jl")
+include("ka_float32_smoke_test.jl")
 include("batch_test.jl")
 include("time_test.jl")
 include("alignment_tracking_test.jl")
