@@ -3,7 +3,7 @@ This function returns two Gaussian random numbers with
 mean 0 and standard deviations sigma1, sigma2.
 """
 function gaussian_random(::CPU, sigma1, sigma2)
-  return randn()*sigma1, randn()*sigma2
+  return gaussian_random(CPUTag(), sigma1, sigma2)
 end
 
 
@@ -24,9 +24,5 @@ This was implemented because CUDA.randn has some horrible
 compiler bug, but CUDA.rand seems to be ok.
 """
 function gaussian_random(::GPU, sigma1, sigma2)
-  s, c = sincospi(2 * rand())
-  t = sqrt(-2 * log(rand()))
-  z0 = c*t*sigma1
-  z1 = s*t*sigma2
-  return z0, z1
+  return gaussian_random(GenericGPUTag(), sigma1, sigma2)
 end

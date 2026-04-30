@@ -79,8 +79,8 @@ s: element length
   yp = v[i,PYI] / rel_p  # y'
   sqrtks = sqrt(abs(k1 / rel_p)) * s  # |κ|s
 
-  cosine = cos(sqrtks)
-  coshine = cosh(sqrtks)
+  cosine = _trig_cos(sqrtks)
+  coshine = _trig_cosh(sqrtks)
   sinecu = sincu(sqrtks)
   shinecu = sinhcu(sqrtks)
   cx = vifelse(focus, cosine, coshine)

@@ -20,18 +20,23 @@ const STATE_LOST_PZ    = UInt8(7)
 const STATE_LOST_Z     = UInt8(8)
 
 # Always SOA
-struct Coords{S,V,Q,W,T}
+struct Coords{S,V,Q,W,T,J}
   state::S # Array of particle states
   v::V     # Matrix of particle coordinates
   q::Q     # Matrix of particle quaternions if spin else nothing 
   weight::W     # Array of particle weights if weighted else nothing
   callbacks::T  # Tuple of functions to evaluate inside kernels
-  function Coords(state, v, q, weight, callbacks)
+  jac::J   # Optional `N x 6 x 6` coordinate Jacobian buffer; `nothing` if unused
+  function Coords(state, v, q, weight, callbacks, jac=nothing)
     if !isnothing(q) && eltype(v) != eltype(q)
       error("Cannot initialize Coords with orbital coordinates of type $(eltype(v))
              and quaternion coordinates of type $(typeof(q)).")
     end
-    return new{typeof(state),typeof(v),typeof(q),typeof(weight),typeof(callbacks)}(state, v, q, weight, callbacks)
+    if !isnothing(jac)
+      size(jac) == (size(v, 1), 6, 6) || error("Jacobian sidecar must have shape (N, 6, 6); got size $(size(jac)) for N=$(size(v, 1))")
+      eltype(jac) == eltype(v) || error("Jacobian sidecar eltype must match coords.v eltype")
+    end
+    return new{typeof(state),typeof(v),typeof(q),typeof(weight),typeof(callbacks),typeof(jac)}(state, v, q, weight, callbacks, jac)
   end
 end
 
@@ -39,26 +44,30 @@ mutable struct Bunch{B,T,C<:Coords}
   species::Species # Species
   p_over_q_ref::B         # Defines normalization of phase space coordinates
   t_ref::T         # Reference time
-  const coords::C  # GPU compatible structure of particles
+  const coords::C  # GPU compatible structure of particles (Jacobian buffer is `coords.jac`)
 end
 
 function Base.getproperty(b0::Bunch, key::Symbol)
-  if key in (:state, :v, :q, :weight, :callbacks)
+  if key in (:state, :v, :q, :weight, :callbacks, :jac)
     return getproperty(b0.coords, key)
   else
     return getfield(b0, key)
   end
 end
 
-Base.propertynames(b0::Bunch) = (:state, :v, :q, :weight, :callbacks, :species, :p_over_q_ref, :t_ref, :coords)
+Base.propertynames(b0::Bunch) = (:state, :v, :q, :weight, :callbacks, :jac, :species, :p_over_q_ref, :t_ref, :coords)
 
 # Necessary for GPU compatibility:
 Adapt.@adapt_structure Coords
 
 get_N_particle(bunch::Bunch) = size(bunch.coords.v, 1)
 
+@inline _coord_ref_type(v) = eltype(v) <: AbstractFloat ? eltype(v) : Float64
+@inline _coord_ref_scalar(::Type{T}, x::Number) where {T} = T(x)
+@inline _coord_ref_scalar(::Type{T}, x) where {T} = x
+
 """
-    Bunch(; v, state, spin, q, weight, callbacks, p_over_q_ref, t_ref, species)
+    Bunch(; v, state, spin, q, weight, callbacks, jacobian, jac, p_over_q_ref, t_ref, species)
 
 Construct a `Bunch` of particles for tracking.
 
@@ -88,6 +97,8 @@ Construct a `Bunch` of particles for tracking.
   of the phase space coordinates.
 - `t_ref=0.`: Reference time.
 - `species=Species()`: Particle species.
+- `jacobian::Bool=false`: If `true`, the default for `jac` is a new identity `N x 6 x 6` Jacobian sidecar stored on `coords.jac` (same idea as `spin` defaulting `q`).
+- `jac`: Jacobian buffer (`N x 6 x 6`), same layout as [`allocate_coordinate_jacobian`](@ref). Defaults to `nothing`, or to a new identity buffer when `jacobian=true`. Pass this keyword explicitly to use your own storage (overrides the default for `jac`). Accessible as `bunch.jac` (forwarded from `bunch.coords.jac`).
 
 # Example
 ```julia
@@ -97,6 +108,9 @@ bunch = Bunch(v=v, species=Species("electron"), p_over_q_ref=-60.0)
 
 # With spin tracking:
 bunch = Bunch(v=v, spin=true, species=Species("electron"), p_over_q_ref=-60.0)
+
+# With analytic coordinate Jacobian tracking through kernels / beamlines:
+bunch = Bunch(v=v, jacobian=true, species=Species("electron"), p_over_q_ref=-60.0)
 ```
 """
 function Bunch(;
@@ -106,27 +120,37 @@ function Bunch(;
   q= spin ? (qs = similar(v, (size(v, 1), 4)); qs .= 0; qs[:,1] .= 1; qs) : nothing,
   weight=nothing,
   callbacks=(),
-  p_over_q_ref=NaN, 
-  t_ref=0., 
+  jacobian::Bool=false,
+  jac= jacobian ? identity_jacobian!(similar(v, size(v, 1), 6, 6)) : nothing,
+  p_over_q_ref=NaN,
+  t_ref=0.,
   species=Species(),
 )
   size(v, 2) == 6 || error("The number of columns of the particle coordinates vector `v` must be equal to 6")
-  return Bunch(species, p_over_q_ref, t_ref, Coords(state, v, q, weight, callbacks))
+  T = _coord_ref_type(v)
+  p_over_q_ref = _coord_ref_scalar(T, p_over_q_ref)
+  t_ref = T(t_ref)
+  coords = Coords(state, v, q, weight, callbacks, jac)
+  return Bunch(species, p_over_q_ref, t_ref, coords)
 end
 
-function Bunch(v::AbstractMatrix, q=nothing, weight=nothing; p_over_q_ref=NaN, t_ref=0., species=Species(), callbacks=())
+function Bunch(v::AbstractMatrix, q=nothing, weight=nothing; p_over_q_ref=NaN, t_ref=0., species=Species(), callbacks=(), jacobian::Bool=false, jac= jacobian ? identity_jacobian!(similar(v, size(v, 1), 6, 6)) : nothing)
   size(v, 2) == 6 || error("The number of columns must be equal to 6")
+  T = _coord_ref_type(v)
+  p_over_q_ref = _coord_ref_scalar(T, p_over_q_ref)
+  t_ref = T(t_ref)
   N_particle = size(v, 1)
   state = similar(v, UInt8, N_particle)
   state .= STATE_ALIVE
-  return Bunch(species, p_over_q_ref, t_ref, Coords(state, v, q, weight, callbacks))
+  coords = Coords(state, v, q, weight, callbacks, jac)
+  return Bunch(species, p_over_q_ref, t_ref, coords)
 end
 
-function Bunch(v::AbstractVector, q=nothing, weight=nothing; p_over_q_ref=NaN, t_ref=0., species=Species(), callbacks=())
+function Bunch(v::AbstractVector, q=nothing, weight=nothing; kwargs...)
   length(v) == 6 || error("Bunch accepts a N x 6 matrix of N particle coordinates,
                             or alternatively a single particle as a vector. Received 
                             a vector of length $(length(v))")
-  return Bunch(reshape(v, (1,6)), q, weight; p_over_q_ref=p_over_q_ref, t_ref=t_ref, species=species, callbacks=callbacks)
+  return Bunch(reshape(v, (1, 6)), q, weight; kwargs...)
 end
 
 struct ParticleView{B,T,S,V,Q,W}

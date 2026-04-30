@@ -88,7 +88,13 @@ no loss in computing both but benefit of branchless.
   bmn = getfield(bm, :n)
   bms = getfield(bm, :s)
   bmtilt = getfield(bm, :tilt)
-  if isconcretetype(eltype(bmn))
+  n_plain = (bmn isa AbstractArray) ? (eltype(bmn) <: AbstractFloat) : (bmn isa AbstractFloat)
+  s_plain = (bms isa AbstractArray) ? (eltype(bms) <: AbstractFloat) : (bms isa AbstractFloat)
+  tilt_plain = (bmtilt isa AbstractArray) ? (eltype(bmtilt) <: AbstractFloat) : (bmtilt isa AbstractFloat)
+  if p_over_q_ref isa AbstractFloat && n_plain && s_plain && tilt_plain
+    # Anchor Float32 for GPU paths, but do NOT destroy AD types (Dual/TPS/etc.).
+    T = typeof(p_over_q_ref)
+  elseif isconcretetype(eltype(bmn))
     T = promote_type(eltype(bmn),
                     typeof(L), typeof(p_over_q_ref)
     )
@@ -107,6 +113,7 @@ no loss in computing both but benefit of branchless.
       )
     end
   end
+  L = T(L)
   n = T.(make_static(bmn))
   s = T.(make_static(bms))
   tilt = T.(make_static(bmtilt))
@@ -126,7 +133,13 @@ end
   bmn = getfield(bm, :n)
   bms = getfield(bm, :s)
   bmtilt = getfield(bm, :tilt)
-  if isconcretetype(eltype(bmn))
+  n_plain = (bmn isa AbstractArray) ? (eltype(bmn) <: AbstractFloat) : (bmn isa AbstractFloat)
+  s_plain = (bms isa AbstractArray) ? (eltype(bms) <: AbstractFloat) : (bms isa AbstractFloat)
+  tilt_plain = (bmtilt isa AbstractArray) ? (eltype(bmtilt) <: AbstractFloat) : (bmtilt isa AbstractFloat)
+  if p_over_q_ref isa AbstractFloat && n_plain && s_plain && tilt_plain
+    # Anchor Float32 for GPU paths, but do NOT destroy AD types (Dual/TPS/etc.).
+    T = typeof(p_over_q_ref)
+  elseif isconcretetype(eltype(bmn))
     T = promote_type(eltype(bmn),
                     typeof(L), typeof(p_over_q_ref)
     )
@@ -145,6 +158,7 @@ end
       )
     end
   end
+  L = T(L)
   n = T.(make_static(bmn))
   s = T.(make_static(bms))
   tilt = T.(make_static(bmtilt))

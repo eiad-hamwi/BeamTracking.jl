@@ -25,7 +25,9 @@ export Species
 export Bunch, State, ParticleView, Time, TimeDependentParam, BatchParam
 export Yoshida, Yoshida, MatrixKick, BendKick, SolenoidKick, DriftKick, Exact
 export Fringe, SaganCavity, track!
-export track_with_jac!, value_and_jacobian, allocate_coordinate_jacobian, identity_jacobian!, jacobianize
+export launch!, value_and_jacobian, allocate_coordinate_jacobian, identity_jacobian!, jacobianize, convert_eltype
+export validate_kernelchain
+export AutoBeamTracking, BeamTrackingFlow, beamtracking_flow, beamtracking_jacobian_flat
 
 
 include("utils/coord_transforms.jl")
@@ -43,7 +45,6 @@ include("beamtracking_differentiation.jl")
 include("time.jl")
 include("batch.jl")
 include("kernel.jl")
-include("utils/kernelchain_validation.jl")
 include("tracking_methods.jl")
 
 include("kernels/kernel_utils.jl")

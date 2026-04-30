@@ -88,11 +88,11 @@ provided, a linear hard-edge fringe map is applied at both ends.
   coords.state[i] = vifelse(!good_arg & alive, STATE_LOST, coords.state[i])
   alive = (coords.state[i] == STATE_ALIVE)
 
-  phi1 = theta + asin(vifelse(good_arg, arg, arg_0))
+  phi1 = theta + _trig_asin(vifelse(good_arg, arg, arg_0))
   gp = Kn0 / pt
   h = 1 + g*v[i,XI] 
-  cplus = cos(phi1) 
-  splus = sin(phi1)
+  cplus = _trig_cos(phi1) 
+  splus = _trig_sin(phi1)
   sinc_theta = sincu(theta)
   sinc_theta_2 = sincu(theta/2)
   cosc_theta = sinc_theta_2*sinc_theta_2/2
@@ -117,13 +117,13 @@ provided, a linear hard-edge fringe map is applied at both ends.
   xi2 = (nasty_sqrt - cplus)/gp_safe
   xi = vifelse(!good_gp | pos_cplus, xi1, xi2)
 
-  Lcv = -sgn*(L*sinc_theta + v[i,XI]*sin(theta)) 
+  Lcv = -sgn*(L*sinc_theta + v[i,XI]*_trig_sin(theta)) 
   negative_Lcv = -Lcv
   thetap = 2*(phi1 - sgn*atan2(xi, negative_Lcv)) 
   Lp = sgn*sqrt(Lcv*Lcv + xi*xi)/sincu(thetap/2) 
 
-  new_x = v[i,XI]*cos(theta) - L*L*g*cosc_theta + xi
-  new_px = pt*sin(phi1 - thetap)
+  new_x = v[i,XI]*_trig_cos(theta) - L*L*g*cosc_theta + xi
+  new_px = pt*_trig_sin(phi1 - thetap)
   new_y = v[i,YI] + v[i,PYI]*Lp/pt
   new_z = v[i,ZI] - rel_p*Lp/pt + L*rel_p/sqrt(tilde_m*tilde_m + rel_p*rel_p)/beta_0
   v[i,XI]  = vifelse(alive, new_x, v[i,XI])
@@ -137,7 +137,7 @@ end
   v = coords.v
   alive = (coords.state[i] == STATE_ALIVE)
 
-  f = Kn0*tan(e)
+  f = Kn0*_trig_tan(e)
 
   if !isnothing(coords.q)
     b_vec = (-v[i,YI]*f - sign*v[i,XI]*Ksol/2, -v[i,XI]*f - sign*v[i,YI]*Ksol/2, sign*v[i,YI]*Kn0)

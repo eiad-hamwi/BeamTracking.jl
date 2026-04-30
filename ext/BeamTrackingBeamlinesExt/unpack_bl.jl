@@ -1,17 +1,8 @@
 # Step 1: Unpack the element ---------------------------------------------
-function _track!(
-  coords::Coords,
-  bunch::Bunch,
-  ele::LineElement, 
-  tm,
-  scalar_params,
-  ramp_without_rf;
-  kwargs...
-)
-  # Unpack the line element (type unstable)
+@inline function _unpack_element_tracking_data(ele::LineElement, scalar_params::Bool)
   L = float(ele.L) # Automatically calls deval (element-level get)
   # float call is required because L is allowed to be any type
-  # in order to keep binaries smaller for tracking routines, 
+  # in order to keep binaries smaller for tracking routines,
   # we don't want to compile separate routines for Int64
   ap = deval(ele.AlignmentParams)
   bp = deval(ele.BendParams)
@@ -36,18 +27,36 @@ function _track!(
     p_over_q_ref = scalarize(p_over_q_ref)
   end
 
-  # Function barrier
-  universal!(coords, tm, ele, ramp_without_rf, bunch, L, p_over_q_ref, ap, bp, bm, pp, dp, rp, lp, mp; kwargs...)
+  return (; L, p_over_q_ref, ap, bp, bm, pp, dp, rp, lp, mp)
+end
+
+function _track!(
+  coords::Coords,
+  bunch::Bunch,
+  ele::LineElement, 
+  tm,
+  scalar_params,
+  ramp_without_rf;
+  kwargs...
+)
+  unpacked = _unpack_element_tracking_data(ele, scalar_params)
+
+  universal!(
+    coords, tm, ele, ramp_without_rf, bunch,
+    unpacked.L, unpacked.p_over_q_ref,
+    unpacked.ap, unpacked.bp, unpacked.bm, unpacked.pp, unpacked.dp,
+    unpacked.rp, unpacked.lp, unpacked.mp;
+    kwargs...
+  )
 end
 
 # Step 2: Push particles through -----------------------------------------
-function universal!(
-  coords,
+function _build_kernel_chain(
   tm,
   ele,
-  ramp_without_rf, 
+  ramp_without_rf,
   bunch,
-  L, 
+  L,
   p_over_q_ref,
   alignmentparams,
   bendparams,
@@ -56,9 +65,8 @@ function universal!(
   apertureparams,
   rfparams,
   beamlineparams,
-  mapparams;
-  kwargs...
-) 
+  mapparams
+)
   beta_gamma_ref = R_to_beta_gamma(bunch.species, bunch.p_over_q_ref)
   # Current KernelChain length is 7 because we have up to
   # 2 aperture, 2 alignment, 1 body kernel, 1 IBS kernel, and
@@ -70,7 +78,7 @@ function universal!(
     p_over_q_ref_initial = bunch.p_over_q_ref
     p_over_q_ref_final = p_over_q_ref(bunch.t_ref)
     if !(p_over_q_ref_initial ≈ p_over_q_ref_final)
-      kc = push(kc, KernelCall(BeamTracking.reference_momentum_shift!, (p_over_q_ref_initial, 
+      kc = push(kc, KernelCall(BeamTracking.reference_momentum_shift!, (p_over_q_ref_initial,
                                        p_over_q_ref_final-p_over_q_ref_initial, !ramp_without_rf)))
       setfield!(bunch, :p_over_q_ref, p_over_q_ref_final)
     end
@@ -93,13 +101,13 @@ function universal!(
     kc = push(kc, @inline(aperture(tm, bunch, apertureparams, true)))
   end
 
-  if ((hasfield(typeof(tm), :ibs_damping_on) && hasfield(typeof(tm), :ibs_fluctuations_on)) 
+  if ((hasfield(typeof(tm), :ibs_damping_on) && hasfield(typeof(tm), :ibs_fluctuations_on))
     && (tm.ibs_damping_on || tm.ibs_fluctuations_on) && L > 0)
     bp = ifelse(isactive(bendparams), bendparams, nothing)
     kc = push(kc, @inline(ibs_kick(tm, bunch, bp, L)))
   end
 
-  if isactive(mapparams)    
+  if isactive(mapparams)
     if isactive(bendparams)
       error("Tracking through a LineElement containing both MapParams and BendParams not currently defined")
     elseif isactive(bmultipoleparams)
@@ -112,7 +120,7 @@ function universal!(
       kc = push(kc, @inline(pure_map(tm, bunch, mapparams, L)))
     end
 
-  elseif isactive(patchparams)    
+  elseif isactive(patchparams)
     if isactive(alignmentparams)
       error("Tracking through a LineElement containing both PatchParams and AlignmentParams is undefined")
     elseif isactive(bendparams)
@@ -133,11 +141,11 @@ function universal!(
     !rfparams.is_crabcavity || error("Crab cavities not yet supported for tracking")
 
     kc = push(kc, @inline(rfcavity(tm, bunch, bmultipoleparams, rfparams, beamlineparams, L)))
-    
+
   elseif isactive(bendparams)
     if bendparams.edge1_int != 0 || bendparams.edge2_int != 0; error("edge1_int and edge2_int not yet handled for tracking"); end
     # Bend
-    if !isactive(bmultipoleparams) 
+    if !isactive(bmultipoleparams)
       # Bend no field
       kc = push(kc, @inline(bend_no_field(tm, bunch, bendparams, L)))
     else
@@ -243,10 +251,39 @@ function universal!(
     kc = push(kc, @inline(aperture(tm, bunch, apertureparams, false)))
   end
 
-  # noinline necessary here for small binaries and faster execution
+  return kc, beta_gamma_ref
+end
+
+function universal!(
+  coords,
+  tm,
+  ele,
+  ramp_without_rf, 
+  bunch,
+  L, 
+  p_over_q_ref,
+  alignmentparams,
+  bendparams,
+  bmultipoleparams,
+  patchparams,
+  apertureparams,
+  rfparams,
+  beamlineparams,
+  mapparams;
+  kwargs...
+) 
+  kc, beta_gamma_ref = _build_kernel_chain(
+    tm, ele, ramp_without_rf, bunch, L, p_over_q_ref,
+    alignmentparams, bendparams, bmultipoleparams, patchparams, apertureparams,
+    rfparams, beamlineparams, mapparams
+  )
+
+  groupsize = get(kwargs, :groupsize, nothing)
+  use_KA = get(kwargs, :use_KA, !(get_backend(coords.v) isa CPU && isnothing(groupsize)))
+  kc = BeamTracking.validate_kernelchain(coords, kc; groupsize, use_KA)
+
   @noinline launch!(coords, kc; kwargs...)
 
-  # Evolve time through whole element
   bunch.t_ref += L / beta_gamma_to_v(beta_gamma_ref)
 
   return nothing
@@ -258,6 +295,8 @@ end
 function universal!(coords, tm::SaganCavity, ele, ramp_without_rf, bunch, L,
   p_over_q_ref, alignmentparams, bendparams, bmultipoleparams, patchparams, apertureparams,
   rfparams, beamlineparams, mapparams; kwargs...) 
+
+  coords.jac !== nothing && error("Jacobian pushforward does not support SaganCavity tracking")
 
   !isactive(mapparams) || error("SaganCavity Tracking through element $ele_name with MapParams is undefined")
   !isactive(patchparams) || error("SaganCavity Tracking through element $ele_name with PatchParams is undefined")
@@ -316,6 +355,9 @@ function universal!(coords, tm::SaganCavity, ele, ramp_without_rf, bunch, L,
   end
 
   # noinline necessary here for small binaries and faster execution
+  groupsize = get(kwargs, :groupsize, nothing)
+  use_KA = get(kwargs, :use_KA, !(get_backend(coords.v) isa CPU && isnothing(groupsize)))
+  kc = BeamTracking.validate_kernelchain(coords, kc; groupsize, use_KA)
   @noinline launch!(coords, kc; kwargs...)
 
   # reference time change

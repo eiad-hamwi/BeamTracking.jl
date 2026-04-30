@@ -1,6 +1,21 @@
+"""
+    Jet6{T}
+
+Dual-style scalar with value `x` and six partials `dx` for coordinate Jacobian pushforward.
+`T` should match the orbital coordinate eltype (`eltype(coords.v)`). Arithmetic is defined for
+`T <: Number`. SIMD lanes use `T <: SIMD.Vec` for `x`. [`abs`](@ref), [`sign`](@ref), and
+ordering (`<`, etc.) delegate to `x` (scalar real or per-lane vector). `Complex` `Jet6` is
+rejected for [`abs`](@ref) / [`sign`](@ref).
+"""
 struct Jet6{T}
   x::T
   dx::SVector{6,T}
+end
+
+# High-precision Yoshida coefficients as `Float64`; combine with `ds_step` using its numeric type
+# (supports e.g. `Float32`, `Float16`, `Complex`, `Rational`, integer step).
+@inline function _yoshida_weight(ds_step, c::Float64)
+  return oftype(float(ds_step), c) * ds_step
 end
 
 @inline value(a::Jet6) = a.x
@@ -24,25 +39,46 @@ end
 @inline Base.:+(a::Jet6, b::Jet6) = Jet6(a.x + b.x, a.dx + b.dx)
 @inline Base.:+(a::Jet6, b::Number) = Jet6(a.x + b, a.dx)
 @inline Base.:+(a::Number, b::Jet6) = Jet6(a + b.x, b.dx)
+@inline Base.:+(a::Jet6, b::SIMD.Vec) = Jet6(a.x + b, a.dx)
+@inline Base.:+(a::SIMD.Vec, b::Jet6) = Jet6(a + b.x, b.dx)
 @inline Base.:-(a::Jet6, b::Jet6) = Jet6(a.x - b.x, a.dx - b.dx)
 @inline Base.:-(a::Jet6, b::Number) = Jet6(a.x - b, a.dx)
 @inline Base.:-(a::Number, b::Jet6) = Jet6(a - b.x, -b.dx)
+@inline Base.:-(a::Jet6, b::SIMD.Vec) = Jet6(a.x - b, a.dx)
+@inline Base.:-(a::SIMD.Vec, b::Jet6) = Jet6(a - b.x, -b.dx)
 @inline Base.:-(a::Jet6) = Jet6(-a.x, -a.dx)
-@inline Base.:*(a::Jet6, b::Jet6) = Jet6(a.x*b.x, a.x*b.dx + b.x*a.dx)
-@inline Base.:*(a::Jet6, b::Number) = Jet6(a.x*b, a.dx*b)
-@inline Base.:*(a::Number, b::Jet6) = Jet6(a*b.x, a*b.dx)
-@inline Base.:/(a::Jet6, b::Jet6) = Jet6(a.x/b.x, (a.dx*b.x - a.x*b.dx)/(b.x*b.x))
-@inline Base.:/(a::Jet6, b::Number) = Jet6(a.x/b, a.dx/b)
-@inline Base.:/(a::Number, b::Jet6) = Jet6(a/b.x, -a*b.dx/(b.x*b.x))
-@inline Base.sqrt(a::Jet6) = (s = sqrt(a.x); Jet6(s, a.dx/(2s)))
-@inline Base.sin(a::Jet6) = Jet6(sin(a.x), cos(a.x)*a.dx)
-@inline Base.cos(a::Jet6) = Jet6(cos(a.x), -sin(a.x)*a.dx)
-@inline Base.tan(a::Jet6) = (t = tan(a.x); Jet6(t, (one(a.x) + t*t)*a.dx))
-@inline Base.asin(a::Jet6) = Jet6(asin(a.x), a.dx / sqrt(one(a.x) - a.x*a.x))
-@inline Base.sinh(a::Jet6) = Jet6(sinh(a.x), cosh(a.x)*a.dx)
-@inline Base.cosh(a::Jet6) = Jet6(cosh(a.x), sinh(a.x)*a.dx)
-@inline Base.atan(y::Jet6, x::Jet6) = (d = x.x*x.x + y.x*y.x; Jet6(atan(y.x, x.x), (x.x*y.dx - y.x*x.dx)/d))
-@inline Base.abs(a::Jet6) = Jet6(abs(a.x), sign(a.x)*a.dx)
+@inline _svec_mul(a, dx) = SVector{6}(ntuple(k -> a * dx[k], Val(6)))
+@inline _svec_div(dx, a) = SVector{6}(ntuple(k -> dx[k] / a, Val(6)))
+@inline _svec_axpby(a, x, b, y) = SVector{6}(ntuple(k -> a*x[k] + b*y[k], Val(6)))
+@inline Base.:*(a::Jet6, b::Jet6) = Jet6(a.x*b.x, _svec_axpby(a.x, b.dx, b.x, a.dx))
+@inline Base.:*(a::Jet6, b::Number) = Jet6(a.x*b, _svec_mul(b, a.dx))
+@inline Base.:*(a::Number, b::Jet6) = Jet6(a*b.x, _svec_mul(a, b.dx))
+@inline Base.:*(a::Jet6, b::SIMD.Vec) = Jet6(a.x*b, _svec_mul(b, a.dx))
+@inline Base.:*(a::SIMD.Vec, b::Jet6) = Jet6(a*b.x, _svec_mul(a, b.dx))
+@inline Base.:/(a::Jet6, b::Jet6) = Jet6(a.x/b.x, _svec_div(_svec_axpby(b.x, a.dx, -a.x, b.dx), b.x*b.x))
+@inline Base.:/(a::Jet6, b::Number) = Jet6(a.x/b, _svec_div(a.dx, b))
+@inline Base.:/(a::Number, b::Jet6) = Jet6(a/b.x, _svec_div(_svec_mul(-a, b.dx), b.x*b.x))
+@inline Base.:/(a::Jet6, b::SIMD.Vec) = Jet6(a.x/b, _svec_div(a.dx, b))
+@inline Base.:/(a::SIMD.Vec, b::Jet6) = Jet6(a/b.x, _svec_div(_svec_mul(-a, b.dx), b.x*b.x))
+@inline Base.sqrt(a::Jet6) = (s = sqrt(a.x); Jet6(s, _svec_div(a.dx, 2s)))
+@inline Base.sin(a::Jet6) = Jet6(_trig_sin(a.x), _svec_mul(_trig_cos(a.x), a.dx))
+@inline Base.cos(a::Jet6) = Jet6(_trig_cos(a.x), _svec_mul(-_trig_sin(a.x), a.dx))
+@inline Base.tan(a::Jet6) = (t = _trig_tan(a.x); Jet6(t, _svec_mul(one(a.x) + t * t, a.dx)))
+@inline Base.asin(a::Jet6) = Jet6(_trig_asin(a.x), _svec_div(a.dx, sqrt(one(a.x) - a.x * a.x)))
+@inline Base.sinh(a::Jet6) = Jet6(_trig_sinh(a.x), _svec_mul(_trig_cosh(a.x), a.dx))
+@inline Base.cosh(a::Jet6) = Jet6(_trig_cosh(a.x), _svec_mul(_trig_sinh(a.x), a.dx))
+@inline function atan2(y::Jet6, x::Jet6)
+  d = x.x*x.x + y.x*y.x
+  return Jet6(atan2(y.x, x.x), _svec_div(_svec_axpby(x.x, y.dx, -y.x, x.dx), d))
+end
+@inline Base.atan(y::Jet6, x::Jet6) = atan2(y, x)
+@inline function Base.abs(a::Jet6{<:Complex})
+  error("Jacobian pushforward abs(::Jet6{<:Complex}) is not defined; use real coordinates.")
+end
+@inline Base.abs(a::Jet6) = Jet6(abs(a.x), _svec_mul(sign(a.x), a.dx))
+@inline function Base.sign(a::Jet6{<:Complex})
+  error("Jacobian pushforward sign(::Jet6{<:Complex}) is not defined; use real coordinates.")
+end
 @inline Base.sign(a::Jet6) = sign(a.x)
 @inline Base.:<(a::Jet6, b::Jet6) = a.x < b.x
 @inline Base.:<(a::Jet6, b::Number) = a.x < b
@@ -60,22 +96,26 @@ end
 @inline _mask_select(mask, a, b) = vifelse(mask, a, b)
 @inline _mask_select(mask::Bool, a::Jet6, b::Jet6) = ifelse(mask, a, b)
 @inline _mask_select(mask, a::Jet6, b::Jet6) = Jet6(vifelse(mask, a.x, b.x), SVector{6}(ntuple(k -> vifelse(mask, a.dx[k], b.dx[k]), Val(6))))
+@inline Base.ifelse(mask::SIMD.Vec{N,Bool}, a::Jet6, b::Jet6) where {N} = _mask_select(mask, a, b)
 
-@inline _lane_eps(x::T) where {T<:Number} = eps(T)
+@inline function _lane_eps(x::Number)
+  r = real(x)
+  return typeof(r) <: AbstractFloat ? eps(r) : eps(float(r))
+end
 @inline _lane_eps(x::SIMD.Vec{N,T}) where {N,T} = SIMD.Vec{N,T}(eps(T))
 
 @inline function sincu(a::Jet6)
   s = sincu(a.x)
-  thr = _lane_eps(a.x)^(1/3)
-  ds = vifelse(abs(a.x) < thr, zero(a.x), (cos(a.x) - s)/a.x)
-  return Jet6(s, ds*a.dx)
+  thr = _cbrt_lane_eps(a.x)
+  ds = vifelse(abs(a.x) < thr, zero(a.x), (_trig_cos(a.x) - s) / a.x)
+  return Jet6(s, _svec_mul(ds, a.dx))
 end
 
 @inline function sinhcu(a::Jet6)
   s = sinhcu(a.x)
-  thr = _lane_eps(a.x)^(1/3)
-  ds = vifelse(abs(a.x) < thr, zero(a.x), (cosh(a.x) - s)/a.x)
-  return Jet6(s, ds*a.dx)
+  thr = _cbrt_lane_eps(a.x)
+  ds = vifelse(abs(a.x) < thr, zero(a.x), (_trig_cosh(a.x) - s) / a.x)
+  return Jet6(s, _svec_mul(ds, a.dx))
 end
 
 @inline function allocate_coordinate_jacobian(coords::Coords)
@@ -183,6 +223,24 @@ end
   return nothing
 end
 
+@inline function left_compose_rotation_jac6_masked!(jac, i, alive, w11, w12, w21, w22, a11, a12, a13, a21, a22, a23)
+  @inbounds for c in 1:6
+    jx = jac[i,XI,c]
+    jy = jac[i,YI,c]
+    jpx = jac[i,PXI,c]
+    jpy = jac[i,PYI,c]
+    nx = w11*jx + w12*jy
+    ny = w21*jx + w22*jy
+    npx = a11*jpx + a12*jpy + a13*jac[i,PZI,c]
+    npy = a21*jpx + a22*jpy + a23*jac[i,PZI,c]
+    jac[i,XI,c] = _mask_select(alive, nx, jx)
+    jac[i,YI,c] = _mask_select(alive, ny, jy)
+    jac[i,PXI,c] = _mask_select(alive, npx, jpx)
+    jac[i,PYI,c] = _mask_select(alive, npy, jpy)
+  end
+  return nothing
+end
+
 @inline function exact_drift_map6(x, beta_0, gamsqr_0, tilde_m, L)
   X, PX, Y, PY, Z, PZ = x
   P = one(PZ) + PZ
@@ -195,7 +253,7 @@ end
   return SVector(Xn, PX, Yn, PY, Zn, PZ)
 end
 
-@inline function exact_drift_with_jac!(i, coords::Coords, jac, beta_0, gamsqr_0, tilde_m, L)
+@inline function exact_drift_with_jac!(i, coords::Coords, beta_0, gamsqr_0, tilde_m, L)
   alive = coords.state[i] == STATE_ALIVE
   x0 = coord_svec(coords, i)
   P = one(x0[PZI]) + x0[PZI]
@@ -206,7 +264,7 @@ end
   safe_x = SVector(x0[XI], _mask_select(alive, x0[PXI], zero(x0[PXI])), x0[YI], _mask_select(alive, x0[PYI], zero(x0[PYI])), x0[ZI], _mask_select(alive, x0[PZI], zero(x0[PZI])))
   x1, A = map6_value_and_jac(exact_drift_map6, safe_x, beta_0, gamsqr_0, tilde_m, L)
   masked_store_coord_svec!(coords, i, x1, alive)
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
@@ -223,7 +281,26 @@ end
   return w11, w12, w13, w21, w22, w23, w31, w32, w33
 end
 
-@inline function rotation_with_jac!(i, coords::Coords, jac, q_inv, z_0)
+@inline function _lane_mask_all(mask::Bool)
+  return mask
+end
+@inline function _lane_mask_all(mask::SIMD.Vec{N,Bool}) where {N}
+  return all(Tuple(mask))
+end
+
+@inline function rotation_is_noop(q_inv, z_0)
+  q_id = Bool(q_inv[Q0] == one(q_inv[Q0])) &&
+         Bool(q_inv[QX] == zero(q_inv[QX])) &&
+         Bool(q_inv[QY] == zero(q_inv[QY])) &&
+         Bool(q_inv[QZ] == zero(q_inv[QZ]))
+  zm = z_0 == zero(z_0)
+  return q_id && _lane_mask_all(zm)
+end
+
+@inline function rotation_with_jac!(i, coords::Coords, q_inv, z_0)
+  if rotation_is_noop(q_inv, z_0)
+    return nothing
+  end
   alive = coords.state[i] == STATE_ALIVE
   v = coords.v
   P = one(v[i,PZI]) + v[i,PZI]
@@ -246,42 +323,23 @@ end
   v[i,YI] = _mask_select(alive, w21*x0 + w22*y0 + w23*z_0, y0)
   v[i,PXI] = _mask_select(alive, w11*px0 + w12*py0 + w13*Ps, v[i,PXI])
   v[i,PYI] = _mask_select(alive, w21*px0 + w22*py0 + w23*Ps, v[i,PYI])
-  T = promote_type(typeof(Ps), typeof(w11), typeof(w12), typeof(w13), typeof(w21), typeof(w22), typeof(w23))
-  A = smat6_from_entries(T) do r, c
-    if r == c && (r == ZI || r == PZI)
-      one(T)
-    elseif r == XI && c == XI
-      w11
-    elseif r == XI && c == YI
-      w12
-    elseif r == YI && c == XI
-      w21
-    elseif r == YI && c == YI
-      w22
-    elseif r == PXI && c == PXI
-      w11 - w13*px0/Ps
-    elseif r == PXI && c == PYI
-      w12 - w13*py0/Ps
-    elseif r == PXI && c == PZI
-      w13*P/Ps
-    elseif r == PYI && c == PXI
-      w21 - w23*px0/Ps
-    elseif r == PYI && c == PYI
-      w22 - w23*py0/Ps
-    elseif r == PYI && c == PZI
-      w23*P/Ps
-    else
-      zero(T)
-    end
-  end
-  left_compose_jac6_masked!(jac, i, A, alive)
+  T = typeof(Ps)
+  tw11 = T(w11); tw12 = T(w12); tw13 = T(w13)
+  tw21 = T(w21); tw22 = T(w22); tw23 = T(w23)
+  a11 = tw11 - tw13*px0/Ps
+  a12 = tw12 - tw13*py0/Ps
+  a13 = tw13*P/Ps
+  a21 = tw21 - tw23*px0/Ps
+  a22 = tw22 - tw23*py0/Ps
+  a23 = tw23*P/Ps
+  left_compose_rotation_jac6_masked!(coords.jac, i, alive, tw11, tw12, tw21, tw22, a11, a12, a13, a21, a22, a23)
   return nothing
 end
 
-@inline function linear_bend_fringe_with_jac!(i, coords::Coords, jac, a, tilde_m, Ksol, Kn0, e, sign)
+@inline function linear_bend_fringe_with_jac!(i, coords::Coords, a, tilde_m, Ksol, Kn0, e, sign)
   alive = coords.state[i] == STATE_ALIVE
   v = coords.v
-  f = Kn0*tan(e)
+  f = Kn0 * _trig_tan(e)
   v[i,PXI] = _mask_select(alive, v[i,PXI] + f*v[i,XI], v[i,PXI])
   v[i,PYI] = _mask_select(alive, v[i,PYI] - f*v[i,YI], v[i,PYI])
   T = typeof(f)
@@ -296,26 +354,57 @@ end
       zero(T)
     end
   end
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
 @inline function multipole_kick_map6(x, ms, knl, ksl, excluding)
   X, PX, Y, PY, Z, PZ = x
-  bx, by = normalized_field(ms, knl, ksl, X, Y, excluding)
+  bx, by = normalized_field_runtime(ms, knl, ksl, X, Y, excluding)
   return SVector(X, PX - by, Y, PY + bx, Z, PZ)
 end
 
-@inline function multipole_kick_with_jac!(i, coords::Coords, jac, ms, knl, ksl, excluding)
+@inline function normalized_field_runtime(ms, knl, ksl, x, y, excluding)
+  N = length(ms)
+  z = zero(x*y + first(knl) + first(ksl))
+  addN = (ms[N] != excluding && ms[N] > 0)
+  by = addN ? knl[N] + z : z
+  bx = addN ? ksl[N] + z : z
+
+  for j in (N-1):-1:1
+    curknl = knl[j] + z
+    curksl = ksl[j] + z
+    for m in (ms[j+1]-1):-1:max(ms[j], 1)
+      t = (by*x - bx*y) / m
+      bx = (by*y + bx*x) / m
+      by = t
+      if m == ms[j]
+        if ms[j] != excluding
+          by += curknl
+          bx += curksl
+        end
+      end
+    end
+  end
+
+  for m in (ms[1]-1):-1:1
+    t = (by*x - bx*y) / m
+    bx = (by*y + bx*x) / m
+    by = t
+  end
+  return bx, by
+end
+
+@inline function multipole_kick_with_jac!(i, coords::Coords, ms, knl, ksl, excluding)
   alive = coords.state[i] == STATE_ALIVE
   x1, A = map6_value_and_jac(multipole_kick_map6, coord_svec(coords, i), ms, knl, ksl, excluding)
   masked_store_coord_svec!(coords, i, x1, alive)
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
-@inline function multipole_and_spin_kick_with_jac!(i, coords::Coords, jac, mm, kn, ks, a, tilde_m, L)
-  return multipole_kick_with_jac!(i, coords, jac, mm, kn .* L, ks .* L, 0)
+@inline function multipole_and_spin_kick_with_jac!(i, coords::Coords, mm, kn, ks, a, tilde_m, L)
+  return multipole_kick_with_jac!(i, coords, mm, kn .* L, ks .* L, 0)
 end
 
 @inline function quadrupole_kick_map6(x, beta_0, gamsqr_0, tilde_m, s)
@@ -334,7 +423,7 @@ end
   return SVector(Xn, PX, Yn, PY, Zn, PZ)
 end
 
-@inline function quadrupole_kick_with_jac!(i, coords::Coords, jac, beta_0, gamsqr_0, tilde_m, s)
+@inline function quadrupole_kick_with_jac!(i, coords::Coords, beta_0, gamsqr_0, tilde_m, s)
   alive = coords.state[i] == STATE_ALIVE
   x0 = coord_svec(coords, i)
   P = one(x0[PZI]) + x0[PZI]
@@ -345,7 +434,7 @@ end
   safe_x = SVector(x0[XI], _mask_select(alive, x0[PXI], zero(x0[PXI])), x0[YI], _mask_select(alive, x0[PYI], zero(x0[PYI])), x0[ZI], _mask_select(alive, x0[PZI], zero(x0[PZI])))
   x1, A = map6_value_and_jac(quadrupole_kick_map6, safe_x, beta_0, gamsqr_0, tilde_m, s)
   masked_store_coord_svec!(coords, i, x1, alive)
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
@@ -356,8 +445,8 @@ end
   xp = PX / P
   yp = PY / P
   sqrtks = sqrt(abs(k1 / P)) * s
-  cosine = cos(sqrtks)
-  coshine = cosh(sqrtks)
+  cosine = _trig_cos(sqrtks)
+  coshine = _trig_cosh(sqrtks)
   sinecu = sincu(sqrtks)
   shinecu = sinhcu(sqrtks)
   cx = ifelse(focus, cosine, coshine)
@@ -376,11 +465,11 @@ end
   return SVector(Xn, PXn, Yn, PYn, Zn, PZ)
 end
 
-@inline function quadrupole_matrix_with_jac!(i, coords::Coords, jac, k1, s)
+@inline function quadrupole_matrix_with_jac!(i, coords::Coords, k1, s)
   alive = coords.state[i] == STATE_ALIVE
   x1, A = map6_value_and_jac(quadrupole_matrix_map6, coord_svec(coords, i), k1, s)
   masked_store_coord_svec!(coords, i, x1, alive)
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
@@ -389,11 +478,11 @@ end
   P = one(PZ) + PZ
   pt = sqrt(P*P - PY*PY)
   arg = PX / pt
-  phi1 = theta + asin(arg)
+  phi1 = theta + _trig_asin(arg)
   gp = Kn0 / pt
   h = one(X) + g*X
-  cplus = cos(phi1)
-  splus = sin(phi1)
+  cplus = _trig_cos(phi1)
+  splus = _trig_sin(phi1)
   sinc_theta = sincu(theta)
   sgn = sign(L)
   alpha_helper = h*L*sinc_theta
@@ -407,11 +496,11 @@ end
   P = one(PZ) + PZ
   pt = sqrt(P*P - PY*PY)
   arg = PX / pt
-  phi1 = theta + asin(arg)
+  phi1 = theta + _trig_asin(arg)
   gp = Kn0 / pt
   h = one(X) + g*X
-  cplus = cos(phi1)
-  splus = sin(phi1)
+  cplus = _trig_cos(phi1)
+  splus = _trig_sin(phi1)
   sinc_theta = sincu(theta)
   sinc_theta_2 = sincu(theta/2)
   cosc_theta = sinc_theta_2*sinc_theta_2/2
@@ -425,18 +514,18 @@ end
   xi1 = alpha/(nasty_sqrt + cplus)
   xi2 = (nasty_sqrt - cplus)/gp_safe
   xi = ifelse(!(abs(gp) > zero(gp)) | pos_cplus, xi1, xi2)
-  Lcv = -sgn*(L*sinc_theta + X*sin(theta))
+  Lcv = -sgn*(L*sinc_theta + X*_trig_sin(theta))
   negative_Lcv = -Lcv
-  thetap = 2*(phi1 - sgn*atan(xi, negative_Lcv))
+  thetap = 2*(phi1 - sgn*atan2(xi, negative_Lcv))
   Lp = sgn*sqrt(Lcv*Lcv + xi*xi)/sincu(thetap/2)
-  Xn = X*cos(theta) - L*L*g*cosc_theta + xi
-  PXn = pt*sin(phi1 - thetap)
+  Xn = X*_trig_cos(theta) - L*L*g*cosc_theta + xi
+  PXn = pt*_trig_sin(phi1 - thetap)
   Yn = Y + PY*Lp/pt
   Zn = Z - P*Lp/pt + L*P/sqrt(tilde_m*tilde_m + P*P)/beta_0
   return SVector(Xn, PXn, Yn, PY, Zn, PZ)
 end
 
-@inline function exact_bend_with_jac!(i, coords::Coords, jac, theta, g, Kn0, tilde_m, beta_0, L)
+@inline function exact_bend_with_jac!(i, coords::Coords, theta, g, Kn0, tilde_m, beta_0, L)
   alive = coords.state[i] == STATE_ALIVE
   x0 = coord_svec(coords, i)
   P = one(x0[PZI]) + x0[PZI]
@@ -452,29 +541,29 @@ end
   safe_x = SVector(x0[XI], _mask_select(alive, x0[PXI], zero(x0[PXI])), x0[YI], _mask_select(alive, x0[PYI], zero(x0[PYI])), x0[ZI], _mask_select(alive, x0[PZI], zero(x0[PZI])))
   x1, A = map6_value_and_jac(exact_bend_map6, safe_x, theta, g, Kn0, tilde_m, beta_0, L)
   masked_store_coord_svec!(coords, i, x1, alive)
-  left_compose_jac6_masked!(jac, i, A, alive)
+  left_compose_jac6_masked!(coords.jac, i, A, alive)
   return nothing
 end
 
-@inline function dkd_multipole_with_jac!(i, coords::Coords, jac, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, mm, kn, ks, L)
-  exact_drift_with_jac!(i, coords, jac, beta_0, gamsqr_0, tilde_m, L / 2)
-  multipole_and_spin_kick_with_jac!(i, coords, jac, mm, kn, ks, a, tilde_m, L)
-  exact_drift_with_jac!(i, coords, jac, beta_0, gamsqr_0, tilde_m, L / 2)
+@inline function dkd_multipole_with_jac!(i, coords::Coords, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, mm, kn, ks, L)
+  exact_drift_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L / 2)
+  multipole_and_spin_kick_with_jac!(i, coords, mm, kn, ks, a, tilde_m, L)
+  exact_drift_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L / 2)
   return nothing
 end
 
-@inline function bkb_multipole_with_jac!(i, coords::Coords, jac, q, mc2, radiation_damping, tilde_m, beta_0, a, g, w, w_inv, k0, mm, kn, ks, L)
+@inline function bkb_multipole_with_jac!(i, coords::Coords, q, mc2, radiation_damping, tilde_m, beta_0, a, g, w, w_inv, k0, mm, kn, ks, L)
   knl = kn .* L ./ 2
   ksl = ks .* L ./ 2
-  rotation_with_jac!(i, coords, jac, w, 0)
-  multipole_kick_with_jac!(i, coords, jac, mm, knl, ksl, 1)
-  exact_bend_with_jac!(i, coords, jac, g*L, g, k0, tilde_m, beta_0, L)
-  multipole_kick_with_jac!(i, coords, jac, mm, knl, ksl, 1)
-  rotation_with_jac!(i, coords, jac, w_inv, 0)
+  rotation_with_jac!(i, coords, w, zero(coords.v[i,XI]))
+  multipole_kick_with_jac!(i, coords, mm, knl, ksl, 1)
+  exact_bend_with_jac!(i, coords, g*L, g, k0, tilde_m, beta_0, L)
+  multipole_kick_with_jac!(i, coords, mm, knl, ksl, 1)
+  rotation_with_jac!(i, coords, w_inv, zero(coords.v[i,XI]))
   return nothing
 end
 
-@inline function mkm_quadrupole_with_jac!(i, coords::Coords, jac, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, w, w_inv, k1, mm, kn, ks, L)
+@inline function mkm_quadrupole_with_jac!(i, coords::Coords, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, w, w_inv, k1, mm, kn, ks, L)
   alive = coords.state[i] == STATE_ALIVE
   x0 = coord_svec(coords, i)
   P = one(x0[PZI]) + x0[PZI]
@@ -482,129 +571,115 @@ end
   coords.state[i] = vifelse((!(Ps2 > zero(Ps2))) & alive, STATE_LOST, coords.state[i])
   knl = kn .* L ./ 2
   ksl = ks .* L ./ 2
-  multipole_kick_with_jac!(i, coords, jac, mm, knl, ksl, 2)
-  quadrupole_kick_with_jac!(i, coords, jac, beta_0, gamsqr_0, tilde_m, L / 2)
-  rotation_with_jac!(i, coords, jac, w, 0)
-  quadrupole_matrix_with_jac!(i, coords, jac, k1, L)
-  rotation_with_jac!(i, coords, jac, w_inv, 0)
-  quadrupole_kick_with_jac!(i, coords, jac, beta_0, gamsqr_0, tilde_m, L / 2)
-  multipole_kick_with_jac!(i, coords, jac, mm, knl, ksl, 2)
+  multipole_kick_with_jac!(i, coords, mm, knl, ksl, 2)
+  quadrupole_kick_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L / 2)
+  rotation_with_jac!(i, coords, w, zero(coords.v[i,XI]))
+  quadrupole_matrix_with_jac!(i, coords, k1, L)
+  rotation_with_jac!(i, coords, w_inv, zero(coords.v[i,XI]))
+  quadrupole_kick_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L / 2)
+  multipole_kick_with_jac!(i, coords, mm, knl, ksl, 2)
   return nothing
 end
 
-@inline function order_two_integrator_with_jac!(i, coords::Coords, jac, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
+@inline function order_two_integrator_with_jac!(i, coords::Coords, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
   if !isnothing(edge_params) && fringe_in
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e1, 1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e1, 1)
   end
   for step in 1:num_steps
-    ker(i, coords, jac, params..., ds_step)
+    ker(i, coords, params..., ds_step)
   end
   if !isnothing(edge_params) && fringe_out
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e2, -1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e2, -1)
   end
   return nothing
 end
 
-@inline function order_four_integrator_with_jac!(i, coords::Coords, jac, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
-  w0 = -1.7024143839193153215916254339390434324741363525390625*ds_step
-  w1 =  1.3512071919596577718181151794851757586002349853515625*ds_step
+@inline function order_four_integrator_with_jac!(i, coords::Coords, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
+  w0 = _yoshida_weight(ds_step, -1.7024143839193153215916254339390434324741363525390625)
+  w1 = _yoshida_weight(ds_step, 1.3512071919596577718181151794851757586002349853515625)
   if !isnothing(edge_params) && fringe_in
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e1, 1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e1, 1)
   end
   for step in 1:num_steps
-    ker(i, coords, jac, params..., w1)
-    ker(i, coords, jac, params..., w0)
-    ker(i, coords, jac, params..., w1)
+    ker(i, coords, params..., w1)
+    ker(i, coords, params..., w0)
+    ker(i, coords, params..., w1)
   end
   if !isnothing(edge_params) && fringe_out
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e2, -1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e2, -1)
   end
   return nothing
 end
 
-@inline function order_six_integrator_with_jac!(i, coords::Coords, jac, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
-  w0 =  1.315186320683911169737712043570355*ds_step
-  w1 = -1.17767998417887100694641568096432*ds_step
-  w2 =  0.235573213359358133684793182978535*ds_step
-  w3 =  0.784513610477557263819497633866351*ds_step
+@inline function order_six_integrator_with_jac!(i, coords::Coords, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
+  w0 = _yoshida_weight(ds_step, 1.315186320683911169737712043570355)
+  w1 = _yoshida_weight(ds_step, -1.17767998417887100694641568096432)
+  w2 = _yoshida_weight(ds_step, 0.235573213359358133684793182978535)
+  w3 = _yoshida_weight(ds_step, 0.784513610477557263819497633866351)
   if !isnothing(edge_params) && fringe_in
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e1, 1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e1, 1)
   end
   for step in 1:num_steps
-    ker(i, coords, jac, params..., w3)
-    ker(i, coords, jac, params..., w2)
-    ker(i, coords, jac, params..., w1)
-    ker(i, coords, jac, params..., w0)
-    ker(i, coords, jac, params..., w1)
-    ker(i, coords, jac, params..., w2)
-    ker(i, coords, jac, params..., w3)
+    ker(i, coords, params..., w3)
+    ker(i, coords, params..., w2)
+    ker(i, coords, params..., w1)
+    ker(i, coords, params..., w0)
+    ker(i, coords, params..., w1)
+    ker(i, coords, params..., w2)
+    ker(i, coords, params..., w3)
   end
   if !isnothing(edge_params) && fringe_out
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e2, -1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e2, -1)
   end
   return nothing
 end
 
-@inline function order_eight_integrator_with_jac!(i, coords::Coords, jac, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
-  w0 =  1.7084530707869978*ds_step
-  w1 =  0.102799849391985*ds_step
-  w2 = -1.96061023297549*ds_step
-  w3 =  1.93813913762276*ds_step
-  w4 = -0.158240635368243*ds_step
-  w5 = -1.44485223686048*ds_step
-  w6 =  0.253693336566229*ds_step
-  w7 =  0.914844246229740*ds_step
+@inline function order_eight_integrator_with_jac!(i, coords::Coords, ker, params, photon_params, ds_step, num_steps, edge_params, ::Val{fringe_in}, ::Val{fringe_out}, L) where {fringe_in,fringe_out}
+  w0 = _yoshida_weight(ds_step, 1.7084530707869978)
+  w1 = _yoshida_weight(ds_step, 0.102799849391985)
+  w2 = _yoshida_weight(ds_step, -1.96061023297549)
+  w3 = _yoshida_weight(ds_step, 1.93813913762276)
+  w4 = _yoshida_weight(ds_step, -0.158240635368243)
+  w5 = _yoshida_weight(ds_step, -1.44485223686048)
+  w6 = _yoshida_weight(ds_step, 0.253693336566229)
+  w7 = _yoshida_weight(ds_step, 0.914844246229740)
   if !isnothing(edge_params) && fringe_in
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e1, 1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e1, 1)
   end
   for step in 1:num_steps
-    ker(i, coords, jac, params..., w7)
-    ker(i, coords, jac, params..., w6)
-    ker(i, coords, jac, params..., w5)
-    ker(i, coords, jac, params..., w4)
-    ker(i, coords, jac, params..., w3)
-    ker(i, coords, jac, params..., w2)
-    ker(i, coords, jac, params..., w1)
-    ker(i, coords, jac, params..., w0)
-    ker(i, coords, jac, params..., w1)
-    ker(i, coords, jac, params..., w2)
-    ker(i, coords, jac, params..., w3)
-    ker(i, coords, jac, params..., w4)
-    ker(i, coords, jac, params..., w5)
-    ker(i, coords, jac, params..., w6)
-    ker(i, coords, jac, params..., w7)
+    ker(i, coords, params..., w7)
+    ker(i, coords, params..., w6)
+    ker(i, coords, params..., w5)
+    ker(i, coords, params..., w4)
+    ker(i, coords, params..., w3)
+    ker(i, coords, params..., w2)
+    ker(i, coords, params..., w1)
+    ker(i, coords, params..., w0)
+    ker(i, coords, params..., w1)
+    ker(i, coords, params..., w2)
+    ker(i, coords, params..., w3)
+    ker(i, coords, params..., w4)
+    ker(i, coords, params..., w5)
+    ker(i, coords, params..., w6)
+    ker(i, coords, params..., w7)
   end
   if !isnothing(edge_params) && fringe_out
     a, tilde_m, Ksol, Kn0, e1, e2 = edge_params
-    linear_bend_fringe_with_jac!(i, coords, jac, a, tilde_m, Ksol, Kn0, e2, -1)
+    linear_bend_fringe_with_jac!(i, coords, a, tilde_m, Ksol, Kn0, e2, -1)
   end
   return nothing
 end
 
-_generic_kernel_with_jac!(i, coords, jac, kc) = __generic_kernel_with_jac!(i, coords, jac, kc.chain, kc.ref)
-
-@kernel function generic_kernel_with_jac!(coords::Coords, jac, @Const(kc::KernelChain))
-  i = @index(Global, Linear)
-  @inline _generic_kernel_with_jac!(i, coords, jac, kc)
-end
-
-@unroll function __generic_kernel_with_jac!(i, coords::Coords, jac, chain, ref)
-  @unroll for kcall in chain
-    bargs = process_batch_args(i, kcall.args)
-    args = process_time_args(i, coords, bargs, ref)
-    (kcall.kernel)(i, coords, jac, args...)
-  end
-  return nothing
-end
-
-@inline function check_jacobian_sidecar(coords::Coords, jac)
+@inline function check_jacobian_sidecar(coords::Coords)
+  jac = coords.jac
+  jac === nothing && error("Internal error: Jacobian preflight requires coords.jac")
   size(jac) == (size(coords.v, 1), 6, 6) || error("Jacobian sidecar must have shape (N, 6, 6), got $(size(jac)) for N=$(size(coords.v, 1))")
   eltype(jac) == eltype(coords.v) || error("Jacobian sidecar eltype must match coords.v eltype")
   isnothing(coords.q) || error("Jacobian pushforward does not support spin coordinates")
@@ -622,8 +697,9 @@ end
   return nothing
 end
 
-@inline function preflight_jacobian_tracking(coords::Coords, jac, kc::KernelChain; use_KA::Bool, use_explicit_SIMD::Bool)
-  check_jacobian_sidecar(coords, jac)
+@inline function preflight_jacobian_tracking(coords::Coords, kc::KernelChain; use_KA::Bool, use_explicit_SIMD::Bool)
+  check_jacobian_sidecar(coords)
+  jac = coords.jac
   use_KA && use_explicit_SIMD && error("Cannot use both KernelAbstractions (KA) and explicit SIMD")
   for kcall in kc.chain
     _preflight_jacobian_kcall(kcall)
@@ -634,65 +710,7 @@ end
   return nothing
 end
 
-@inline function launch_with_jac!(
-  coords::Coords,
-  jac,
-  kc::KernelChain;
-  groupsize::Union{Nothing,Integer}=nothing,
-  multithread_threshold::Integer=Threads.nthreads() > 1 ? 1750*Threads.nthreads() : typemax(Int),
-  use_KA::Bool=!(get_backend(coords.v) isa CPU && isnothing(groupsize)),
-  use_explicit_SIMD::Bool=!use_KA
-)
-  preflight_jacobian_tracking(coords, jac, kc; use_KA=use_KA, use_explicit_SIMD=use_explicit_SIMD)
-  v = coords.v
-  N_particle = size(coords.v, 1)
-  if !use_KA
-    if use_explicit_SIMD && v isa SIMD.FastContiguousArray && eltype(v) <: SIMD.ScalarTypes && pick_vector_width(eltype(v)) > 1
-      simd_lane_width = pick_vector_width(eltype(v))
-      lane = SIMD.VecRange{Int(simd_lane_width)}(0)
-      rmn = rem(N_particle, simd_lane_width)
-      N_SIMD = N_particle - rmn
-      if N_particle >= multithread_threshold
-        Threads.@threads for i in 1:simd_lane_width:N_SIMD
-          @assert last(i) <= N_particle "Out of bounds!"
-          _generic_kernel_with_jac!(lane+i, coords, jac, kc)
-        end
-      else
-        for i in 1:simd_lane_width:N_SIMD
-          @assert last(i) <= N_particle "Out of bounds!"
-          _generic_kernel_with_jac!(lane+i, coords, jac, kc)
-        end
-      end
-      for i in N_SIMD+1:N_particle
-        @assert last(i) <= N_particle "Out of bounds!"
-        _generic_kernel_with_jac!(i, coords, jac, kc)
-      end
-    elseif N_particle >= multithread_threshold
-      Threads.@threads for i in 1:N_particle
-        _generic_kernel_with_jac!(i, coords, jac, kc)
-      end
-    else
-      @simd for i in 1:N_particle
-        _generic_kernel_with_jac!(i, coords, jac, kc)
-      end
-    end
-  else
-    backend = get_backend(v)
-    if isnothing(groupsize)
-      kernel! = generic_kernel_with_jac!(backend)
-    else
-      kernel! = generic_kernel_with_jac!(backend, groupsize)
-    end
-    kernel!(coords, jac, kc; ndrange=N_particle)
-    KernelAbstractions.synchronize(backend)
-  end
-  return nothing
-end
-
-@inline launch_with_jac!(coords::Coords, jac, kcall::KernelCall; kwargs...) =
-  launch_with_jac!(coords, jac, KernelChain((kcall,)); kwargs...)
-
-@inline blank_kernel_with_jac!(args...) = nothing
+@inline blank_kernel_with_jac!(i, coords, args...) = nothing
 
 @inline _jacobian_kernel(::typeof(blank_kernel!)) = blank_kernel_with_jac!
 @inline _jacobian_kernel(::typeof(exact_drift!)) = exact_drift_with_jac!
@@ -730,14 +748,19 @@ end
   return KernelChain(map(jacobianize, kc.chain), kc.ref)
 end
 
-function track_with_jac!(coords::Coords, jac, kcall_or_chain; kwargs...)
-  launch_with_jac!(coords, jac, jacobianize(kcall_or_chain); kwargs...)
-  return coords, jac
-end
+"""
+    track!(bunch::Bunch, kcall_or_chain; kwargs...)
 
-function track_with_jac!(bunch::Bunch, jac, kcall_or_chain; kwargs...)
-  track_with_jac!(bunch.coords, jac, kcall_or_chain; kwargs...)
-  return bunch, jac
+Track `bunch.coords` through a [`KernelCall`](@ref) or [`KernelChain`](@ref).
+
+Uses [`launch!`](@ref): if `coords.jac === nothing` runs the primal path; otherwise runs the
+coordinate Jacobian pushforward using `coords.jac` (see [`Bunch`](@ref) keyword `jacobian` / `jac`).
+
+Returns `bunch`.
+"""
+function track!(bunch::Bunch, kcall_or_chain; kwargs...)
+  launch!(bunch.coords, kcall_or_chain; kwargs...)
+  return bunch
 end
 
 function value_and_jacobian(
@@ -750,8 +773,8 @@ function value_and_jacobian(
 )
   length(x0) == 6 || error("value_and_jacobian expects a 6-vector of orbital coordinates")
   v = reshape(copy(collect(x0)), 1, 6)
-  bunch = Bunch(v=v, species=species, p_over_q_ref=p_over_q_ref, t_ref=t_ref)
-  jac = identity_jacobian!(allocate_coordinate_jacobian(bunch))
-  track_with_jac!(bunch, jac, kcall_or_chain; kwargs...)
-  return (value=Vector(bunch.v[1,1:6]), jacobian=Matrix(jac[1,:,:]), state=bunch.state[1])
+  bunch = Bunch(v=v, species=species, p_over_q_ref=p_over_q_ref, t_ref=t_ref, jacobian=true)
+  track!(bunch, kcall_or_chain; kwargs...)
+  jac = bunch.jac
+  return (value=Vector(bunch.v[1, 1:6]), jacobian=Matrix(jac[1, :, :]), state=bunch.state[1])
 end
