@@ -241,6 +241,35 @@ end
   return nothing
 end
 
+@inline function track_aperture_rectangular_with_jac!(
+    i,
+    coords::Coords,
+    x1,
+    x2,
+    y1,
+    y2
+  )
+
+  track_aperture_rectangular!(i, coords, x1, x2, y1, y2)
+
+  return nothing
+end
+
+
+@inline function track_aperture_elliptical_with_jac!(
+    i,
+    coords::Coords,
+    x1,
+    x2,
+    y1,
+    y2
+  )
+
+  track_aperture_elliptical!(i, coords, x1, x2, y1, y2)
+
+  return nothing
+end
+
 @inline function exact_drift_map6(x, beta_0, gamsqr_0, tilde_m, L)
   X, PX, Y, PY, Z, PZ = x
   P = one(PZ) + PZ
@@ -333,6 +362,295 @@ end
   a22 = tw22 - tw23*py0/Ps
   a23 = tw23*P/Ps
   left_compose_rotation_jac6_masked!(coords.jac, i, alive, tw11, tw12, tw21, tw22, a11, a12, a13, a21, a22, a23)
+  return nothing
+end
+
+@inline function patch_mark_bad_momenta!(i, coords::Coords)
+  @inbounds begin
+    v = coords.v
+    rel_p = one(v[i,PZI]) + v[i,PZI]
+    ps2 = rel_p*rel_p - v[i,PXI]*v[i,PXI] - v[i,PYI]*v[i,PYI]
+    good_momenta = ps2 > zero(ps2)
+    alive_at_start = coords.state[i] == STATE_ALIVE
+    coords.state[i] = vifelse((!good_momenta) & alive_at_start, STATE_LOST, coords.state[i])
+  end
+  return nothing
+end
+
+
+@inline function patch_offset_with_jac!(i, coords::Coords, tilde_m, dx, dy, dt)
+  @inbounds begin
+    v = coords.v
+    jac = coords.jac
+
+    alive = coords.state[i] == STATE_ALIVE
+
+    x0 = v[i,XI]
+    y0 = v[i,YI]
+    z0 = v[i,ZI]
+    pz0 = v[i,PZI]
+
+    safe_pz = _mask_select(alive, pz0, zero(pz0))
+
+    P = one(safe_pz) + safe_pz
+    m2 = tilde_m * tilde_m
+    E = sqrt(P*P + m2)
+
+    k = C_LIGHT * dt
+
+    v[i,XI] = _mask_select(alive, x0 - dx, x0)
+    v[i,YI] = _mask_select(alive, y0 - dy, y0)
+    v[i,ZI] = _mask_select(alive, z0 + P/E * k, z0)
+
+    # d/dPZ [ P / sqrt(P^2 + m^2) ] = m^2 / E^3
+    dZ_dPZ = k * m2 / (E*E*E)
+
+    for c in 1:6
+      jz = jac[i,ZI,c]
+      jpz = jac[i,PZI,c]
+      jac[i,ZI,c] = _mask_select(alive, jz + dZ_dPZ * jpz, jz)
+    end
+  end
+
+  return nothing
+end
+
+
+@inline function patch_final_z_no_rotation_with_jac!(i, coords::Coords, D)
+  @inbounds begin
+    v = coords.v
+    jac = coords.jac
+
+    alive = coords.state[i] == STATE_ALIVE
+
+    px0 = v[i,PXI]
+    py0 = v[i,PYI]
+    pz0 = v[i,PZI]
+
+    safe_px = _mask_select(alive, px0, zero(px0))
+    safe_py = _mask_select(alive, py0, zero(py0))
+    safe_pz = _mask_select(alive, pz0, zero(pz0))
+
+    P = one(safe_pz) + safe_pz
+    Pt2 = safe_px*safe_px + safe_py*safe_py
+    Ps = sqrt(P*P - Pt2)
+
+    z0 = v[i,ZI]
+    v[i,ZI] = _mask_select(alive, z0 - D * P/Ps, z0)
+
+    invPs3 = one(Ps) / (Ps*Ps*Ps)
+
+    # f = P/Ps
+    # df/dPX = P*PX/Ps^3
+    # df/dPY = P*PY/Ps^3
+    # df/dPZ = -Pt2/Ps^3
+    dZ_dPX = -D * P * safe_px * invPs3
+    dZ_dPY = -D * P * safe_py * invPs3
+    dZ_dPZ =  D * Pt2 * invPs3
+
+    for c in 1:6
+      jz = jac[i,ZI,c]
+      jpx = jac[i,PXI,c]
+      jpy = jac[i,PYI,c]
+      jpz = jac[i,PZI,c]
+
+      nz = jz + dZ_dPX*jpx + dZ_dPY*jpy + dZ_dPZ*jpz
+      jac[i,ZI,c] = _mask_select(alive, nz, jz)
+    end
+  end
+
+  return nothing
+end
+
+
+@inline function add_exact_drift_sf_dependence_jac6_masked!(i, coords::Coords, beta_0, tilde_m, dsf)
+  @inbounds begin
+    v = coords.v
+    jac = coords.jac
+
+    alive = coords.state[i] == STATE_ALIVE
+
+    px0 = v[i,PXI]
+    py0 = v[i,PYI]
+    pz0 = v[i,PZI]
+
+    safe_px = _mask_select(alive, px0, zero(px0))
+    safe_py = _mask_select(alive, py0, zero(py0))
+    safe_pz = _mask_select(alive, pz0, zero(pz0))
+
+    P = one(safe_pz) + safe_pz
+    Ps = sqrt(P*P - safe_px*safe_px - safe_py*safe_py)
+    E = sqrt(P*P + tilde_m*tilde_m)
+
+    # exact_drift_map6 derivatives wrt its length argument L:
+    #
+    # Xn = X + PX*L/Ps
+    # Yn = Y + PY*L/Ps
+    # Zn = Z - P*L*(1/Ps - 1/(beta_0*E))
+    dX_dL = safe_px / Ps
+    dY_dL = safe_py / Ps
+    dZ_dL = -P * (one(Ps)/Ps - one(E)/(beta_0*E))
+
+    # In patch!, the drift length is Ld = -s_f,
+    # so dLd = -ds_f.
+    for c in 1:6
+      dLd = -dsf[c]
+
+      jx = jac[i,XI,c]
+      jy = jac[i,YI,c]
+      jz = jac[i,ZI,c]
+
+      nx = jx + dX_dL * dLd
+      ny = jy + dY_dL * dLd
+      nz = jz + dZ_dL * dLd
+
+      jac[i,XI,c] = _mask_select(alive, nx, jx)
+      jac[i,YI,c] = _mask_select(alive, ny, jy)
+      jac[i,ZI,c] = _mask_select(alive, nz, jz)
+    end
+  end
+
+  return nothing
+end
+
+
+@inline function patch_final_z_rotation_with_jac!(i, coords::Coords, tilde_m, s_f, L, dsf)
+  @inbounds begin
+    v = coords.v
+    jac = coords.jac
+
+    alive = coords.state[i] == STATE_ALIVE
+
+    pz0 = v[i,PZI]
+    safe_pz = _mask_select(alive, pz0, zero(pz0))
+
+    P = one(safe_pz) + safe_pz
+    m2 = tilde_m * tilde_m
+    E = sqrt(P*P + m2)
+
+    sqrt1pm2 = sqrt(one(P) + m2)
+
+    # K = P * sqrt((1 + m^2)/(P^2 + m^2))
+    K = P * sqrt1pm2 / E
+
+    # dK/dPZ = sqrt(1 + m^2) * m^2 / E^3
+    dK_dPZ = sqrt1pm2 * m2 / (E*E*E)
+
+    sLp = s_f + L
+
+    z0 = v[i,ZI]
+    v[i,ZI] = _mask_select(alive, z0 + sLp * K, z0)
+
+    for c in 1:6
+      jz = jac[i,ZI,c]
+      jpz = jac[i,PZI,c]
+
+      nz = jz + K * dsf[c] + sLp * dK_dPZ * jpz
+      jac[i,ZI,c] = _mask_select(alive, nz, jz)
+    end
+  end
+
+  return nothing
+end
+
+
+# The rotation_with_jac! you pasted does not update coords.q,
+# whereas rotation! does. Keep this helper if patch_with_jac!
+# should exactly match patch! when coords.q is present.
+@inline function rotate_quaternion_only_masked!(i, coords::Coords, q_inv)
+  @inbounds begin
+    q1 = coords.q
+
+    if !isnothing(q1)
+      alive = coords.state[i] == STATE_ALIVE
+
+      q = quat_mul(q_inv, q1[i,Q0], q1[i,QX], q1[i,QY], q1[i,QZ])
+
+      q0 = _mask_select(alive, q[Q0], q1[i,Q0])
+      qx = _mask_select(alive, q[QX], q1[i,QX])
+      qy = _mask_select(alive, q[QY], q1[i,QY])
+      qz = _mask_select(alive, q[QZ], q1[i,QZ])
+
+      q1[i,Q0], q1[i,QX], q1[i,QY], q1[i,QZ] = q0, qx, qy, qz
+    end
+  end
+
+  return nothing
+end
+
+
+@inline function patch_with_jac!(
+    i,
+    coords::Coords,
+    beta_0,
+    gamsqr_0,
+    tilde_m,
+    dt,
+    dx,
+    dy,
+    dz,
+    winv,
+    L
+  )
+
+  @inbounds begin
+    v = coords.v
+
+    # Same initial momentum validity check as patch!.
+    # This is needed before patch_offset_with_jac!, since patch_offset!
+    # is masked by alive state but does not itself mark bad momenta lost.
+    patch_mark_bad_momenta!(i, coords)
+
+    if isnothing(winv)
+      patch_offset_with_jac!(i, coords, tilde_m, dx, dy, dt)
+
+      exact_drift_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L)
+
+      # patch! does:
+      #   z -= (dz - L) * rel_p / ps_0
+      #
+      # In this branch momenta are unchanged by patch_offset! and exact_drift!,
+      # so current momenta give the same rel_p/ps_0.
+      patch_final_z_no_rotation_with_jac!(i, coords, dz - L)
+
+    else
+      patch_offset_with_jac!(i, coords, tilde_m, dx, dy, dt)
+
+      w31 = 2*(winv[QX]*winv[QZ] - winv[QY]*winv[Q0])
+      w32 = 2*(winv[QY]*winv[QZ] + winv[QX]*winv[Q0])
+      w33 = 1 - 2*(winv[QX]*winv[QX] + winv[QY]*winv[QY])
+
+      # s_f is computed after patch_offset! and before rotation!, as in patch!.
+      s_f = w31*v[i,XI] + w32*v[i,YI] - w33*dz
+
+      # Store global derivative of s_f at this point:
+      #
+      #   ds_f = w31*dX + w32*dY
+      #
+      # This must be saved before rotation_with_jac! mutates coords.jac.
+      dsf = ntuple(c -> w31*coords.jac[i,XI,c] + w32*coords.jac[i,YI,c], Val(6))
+
+      rotation_with_jac!(i, coords, winv, -dz)
+
+      # Keep this if rotation_with_jac! itself does not update coords.q.
+      # rotate_quaternion_only_masked!(i, coords, winv)
+
+      # First apply the ordinary constant-length drift Jacobian,
+      # treating -s_f as a frozen scalar.
+      exact_drift_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, -s_f)
+
+      # Then add the missing chain-rule piece from Ld = -s_f(x).
+      add_exact_drift_sf_dependence_jac6_masked!(i, coords, beta_0, tilde_m, dsf)
+
+      # patch! does:
+      #   z += (s_f + L) * rel_p *
+      #        sqrt((1 + tilde_m^2)/(rel_p^2 + tilde_m^2))
+      #
+      # This also depends on s_f, so add both ds_f and d/dPZ terms.
+      patch_final_z_rotation_with_jac!(i, coords, tilde_m, s_f, L, dsf)
+    end
+  end
+
   return nothing
 end
 
@@ -545,6 +863,12 @@ end
   return nothing
 end
 
+@inline function exact_curved_drift_with_jac!(i, coords::Coords, e1, e2, g, w, w_inv, a, tilde_m, beta_0, L) 
+  rotation_with_jac!(i, coords, w, 0)
+  exact_bend_with_jac!(i, coords, g*L, g, 0, tilde_m, beta_0, L)
+  rotation_with_jac!(i, coords, w_inv, 0)
+end
+
 @inline function dkd_multipole_with_jac!(i, coords::Coords, q, mc2, radiation_damping, beta_0, gamsqr_0, tilde_m, a, mm, kn, ks, L)
   exact_drift_with_jac!(i, coords, beta_0, gamsqr_0, tilde_m, L / 2)
   multipole_and_spin_kick_with_jac!(i, coords, mm, kn, ks, a, tilde_m, L)
@@ -714,7 +1038,11 @@ end
 
 @inline _jacobian_kernel(::typeof(blank_kernel!)) = blank_kernel_with_jac!
 @inline _jacobian_kernel(::typeof(exact_drift!)) = exact_drift_with_jac!
+@inline _jacobian_kernel(::typeof(exact_curved_drift!)) = exact_curved_drift_with_jac!
 @inline _jacobian_kernel(::typeof(rotation!)) = rotation_with_jac!
+@inline _jacobian_kernel(::typeof(patch!)) = patch_with_jac!
+@inline _jacobian_kernel(::typeof(track_aperture_rectangular!)) = track_aperture_rectangular_with_jac!
+@inline _jacobian_kernel(::typeof(track_aperture_elliptical!)) = track_aperture_elliptical_with_jac!
 @inline _jacobian_kernel(::typeof(linear_bend_fringe!)) = linear_bend_fringe_with_jac!
 @inline _jacobian_kernel(::typeof(multipole_kick!)) = multipole_kick_with_jac!
 @inline _jacobian_kernel(::typeof(quadrupole_kick!)) = quadrupole_kick_with_jac!
